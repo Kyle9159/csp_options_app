@@ -1,0 +1,88 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.history/
+
+# Windows artifacts
+NUL
+
+# Credentials & Secrets
+.env
+google-credentials.json
+*credentials*.json
+*.token
+
+# Logs
+logs/
+*.log
+
+# Database
+data/trading_bot.db
+data/trading_bot.db-journal
+*.db
+*.db-journal
+
+# Cache
+cache_files/
+*.cache
+__pycache__/
+
+# Scanner Results
+scanner_results/
+assigned_history.json
+
+# Generated HTML
+trading_dashboard.html
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~.nib
+
+# Coverage
+.coverage
+htmlcov/
+
+# pytest
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
