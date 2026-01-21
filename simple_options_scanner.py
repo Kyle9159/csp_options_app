@@ -747,13 +747,23 @@ async def main():
             - Hold/Monitor       → Neutral, wait for better setup
             - Avoid              → Poor risk/reward
 
-            REASON GUIDELINES (IMPORTANT FOR QUALITY):
-            Think step-by-step:
-            1. Evaluate premium/ROI and safety (delta, OTM %, S/R)
-            2. Check DTE and IV fit
-            3. Consider RSI, tier, and regime alignment
-            4. Briefly factor in current company/sector sentiment or recent news (e.g., earnings beat/miss, sector rotation, macro impact)
-            Then write a concise REASON (1-2 sentences, 20-40 words) explaining the score/recommendation. Highlight 2-3 strongest signals and any notable sentiment/news context.
+            CRITICAL FORMATTING REQUIREMENT FOR REASON:
+
+            Your REASON field MUST be AT LEAST 25 WORDS. Single-word or short responses will be rejected.
+
+            Write 2-4 complete sentences (minimum 25 words, target 40-50 words) that explain:
+
+            Sentence 1: Lead with the ROI (e.g., "Strong 40% annualized return with...") and primary safety factor (delta/distance/S&R)
+            Sentence 2: Mention 2-3 key technical signals (RSI level, IV context, DTE appropriateness)
+            Sentence 3: Note support/resistance context and any risk considerations
+            Optional Sentence 4: Company/sector sentiment if relevant
+
+            EXAMPLE GOOD REASON:
+            "Excellent 54% annualized ROI with strong safety buffer - 0.22 delta and 16% OTM provide solid downside protection. RSI at 60 shows healthy momentum without overbought risk, while 98% IV offers strong premium. Strike sits well below 3-month support at $350, giving substantial cushion even in pullback scenarios."
+
+            EXAMPLE BAD REASON (TOO SHORT):
+            "Outstanding" ❌ REJECTED
+            "Good setup" ❌ REJECTED
 
             Respond in EXACT format. One block per opportunity. No extra text, no explanations outside blocks.
 
@@ -779,9 +789,9 @@ async def main():
                 Tier: {opp.get('tier', 3)}
                 S/R Risk (vs 3m support): {sr_risk}
 
-                SCORE: 
-                RECOMMENDATION: 
-                REASON: 
+                SCORE: [Your 0-100 score here]
+                RECOMMENDATION: [MUST be one of: Enter Now, Strong Enter, Consider Entering, Hold/Monitor, Avoid]
+                REASON: [MINIMUM 25 WORDS - Write 2-4 complete sentences explaining ROI, safety metrics, technical factors, and S/R context with specific numbers]
                 --- END ---
                 """
 
@@ -831,8 +841,20 @@ async def main():
             reason = "Analysis failed"
 
             block_lines = [l.strip() for l in block.split('\n') if l.strip()]
+            reason_lines = []
+            capturing_reason = False
+
             for line in block_lines:
                 low_line = line.lower()
+
+                # Stop capturing reason when we hit a new field or END marker
+                if capturing_reason:
+                    if low_line.startswith(("score:", "recommendation:", "---")) or "end" in low_line:
+                        capturing_reason = False
+                    else:
+                        reason_lines.append(line)
+                        continue
+
                 if low_line.startswith("score:"):
                     try:
                         score = int(line.split(":")[1].strip().split("/")[0].strip())
@@ -841,7 +863,29 @@ async def main():
                 elif low_line.startswith("recommendation:"):
                     recommendation = line.split(":", 1)[1].strip()
                 elif low_line.startswith("reason:"):
-                    reason = line.split(":", 1)[1].strip()
+                    # Start capturing reason - may span multiple lines
+                    first_part = line.split(":", 1)[1].strip()
+                    if first_part:
+                        reason_lines.append(first_part)
+                    capturing_reason = True
+
+            # Join all reason lines into a single string
+            if reason_lines:
+                reason = " ".join(reason_lines).strip()
+
+            # If reason is still too short (single word), try to extract more context
+            if len(reason.split()) < 5:
+                # Check if there's more text in the block that might be the reason
+                full_text = " ".join(block_lines)
+                if "REASON:" in full_text.upper():
+                    reason_start = full_text.upper().find("REASON:")
+                    reason_text = full_text[reason_start + 7:].strip()
+                    # Stop at next field marker
+                    for marker in ["SCORE:", "RECOMMENDATION:", "---", "END"]:
+                        if marker in reason_text.upper():
+                            reason_text = reason_text[:reason_text.upper().find(marker)].strip()
+                    if len(reason_text) > len(reason):
+                        reason = reason_text
 
             badge = "⚠️"
             if score >= 90: badge = "🔥"

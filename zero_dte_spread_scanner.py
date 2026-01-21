@@ -11,7 +11,7 @@ from datetime import datetime, date
 import pytz
 import yfinance as yf
 from schwab.client import Client
-from grok_utils import get_grok_analysis
+from grok_utils import get_grok_analysis, get_grok_0dte_recommendation
 from schwab_utils import get_client
 from helper_functions import safe_float
 
@@ -215,6 +215,19 @@ async def scan_0dte_spreads():
         Good entry? Management tips? Risk highlights? Keep under 70 words.
         """
         opp['grok_analysis'] = get_grok_analysis(prompt)
+
+        # Get Grok's recommendation for which side to favor
+        put_credit = opp['total_credit'] * 0.4  # Approximate split
+        call_credit = opp['total_credit'] * 0.6
+        grok_rec = get_grok_0dte_recommendation(
+            symbol=opp['symbol'],
+            underlying_price=opp['underlying_price'],
+            short_put=opp['short_put'],
+            short_call=opp['short_call'],
+            put_credit=put_credit,
+            call_credit=call_credit
+        )
+        opp['grok_recommendation'] = grok_rec
 
     save_cache(opportunities)
     return opportunities

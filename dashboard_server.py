@@ -1427,66 +1427,84 @@ def get_api_recent_trades():
     """
     try:
         limit = int(request.args.get('limit', 10))
+        status_filter = request.args.get('status', 'all').lower()
 
-        # Load from Google Sheets instead of database
-        trades_result = load_trades_from_sheet()
-
-        if trades_result is None:
-            return jsonify({'trades': []})
-
-        df, _ = trades_result
-
-        if df is None or df.empty:
-            return jsonify({'trades': []})
-
-        # Convert DataFrame to list of dicts for API response
         trades = []
-        for _, row in df.iterrows():
-            symbol = str(row.get('Symbol', ''))
-            strike = safe_float(row.get('Strike', 0))
-            entry_premium = safe_float(row.get('Entry Premium', 0))
-            expiration = str(row.get('Exp Date', ''))
-            quantity = int(row.get('Quantity', 0))
 
-            # Try to get live current premium for accurate P&L
+        # Load CLOSED trades from Trade_History sheet
+        if status_filter in ['closed', 'all']:
             try:
-                # Convert expiration format
-                from datetime import datetime as dt
-                if '/' in expiration:
-                    exp_dt = dt.strptime(expiration, '%m/%d/%Y')
-                else:
-                    exp_dt = dt.strptime(expiration, '%Y-%m-%d')
-                expiration_formatted = exp_dt.strftime('%Y-%m-%d')
+                import gspread
+                gc = gspread.service_account(filename='google-credentials.json')
+                sh = gc.open_by_key("1e5p_tKBR3qz52_q0-yIeEbTIofyKTcmcfqgiRBQ52Nc")
+                history_ws = sh.worksheet("Trade_History")
+                records = history_ws.get_all_records()
 
-                # Fetch live quote
-                from order_execution import get_option_bid_ask
-                live_quote = get_option_bid_ask(symbol, strike, expiration_formatted)
+                for row in records:
+                    # Only include trades with Exit Date (closed trades)
+                    exit_date = row.get('Exit Date', '')
+                    if not exit_date:
+                        continue
 
-                if live_quote and live_quote.get('ask', 0) > 0:
-                    current_premium = live_quote['ask']
-                else:
-                    # Fallback to sheet
-                    current_premium = safe_float(row.get('Current Premium', 0))
-            except:
-                # Fallback to sheet value on any error
-                current_premium = safe_float(row.get('Current Premium', 0))
+                    symbol = str(row.get('Symbol', ''))
+                    strike = safe_float(row.get('Strike', 0))
+                    entry_premium = safe_float(row.get('Entry Premium', 0))
+                    exit_premium = safe_float(row.get('Exit Premium', 0))
+                    entry_date = str(row.get('Entry Date', ''))
+                    quantity = safe_int(row.get('Quantity', 1))
+                    net_profit = safe_float(row.get('Net Profit $', 0))
+                    roc = safe_float(row.get('ROC%', 0))
+                    days_held = safe_int(row.get('Days Held', 0))
 
-            # For puts: profit when premium decreases
-            pnl = (entry_premium - current_premium) * quantity * 100
+                    trades.append({
+                        'symbol': symbol,
+                        'strike': strike,
+                        'status': 'closed',
+                        'entry_date': entry_date,
+                        'exit_date': str(exit_date),
+                        'entry_premium': entry_premium,
+                        'exit_premium': exit_premium,
+                        'quantity': quantity,
+                        'pnl': net_profit,
+                        'roc': roc,
+                        'days_held': days_held
+                    })
 
-            trades.append({
-                'symbol': symbol,
-                'strike': strike,
-                'status': 'open',  # All sheet trades are open
-                'entry_date': str(row.get('Entry Date', '')),
-                'entry_premium': entry_premium,
-                'quantity': quantity,
-                'profit_loss': pnl,
-                'current_premium': current_premium
-            })
+                logger.info(f"Loaded {len(trades)} closed trades from Trade_History")
+
+            except Exception as e:
+                logger.error(f"Failed to load Trade_History: {e}")
+
+        # Load OPEN trades from Open Trades sheet
+        if status_filter in ['open', 'all']:
+            try:
+                trades_result = load_trades_from_sheet()
+                if trades_result:
+                    df, _ = trades_result
+                    if df is not None and not df.empty:
+                        for _, row in df.iterrows():
+                            symbol = str(row.get('Symbol', ''))
+                            strike = safe_float(row.get('Strike', 0))
+                            entry_premium = safe_float(row.get('Entry Premium', 0))
+                            current_premium = safe_float(row.get('Current Premium', 0))
+                            quantity = safe_int(row.get('Quantity', 1))
+                            pnl = (entry_premium - current_premium) * quantity * 100
+
+                            trades.append({
+                                'symbol': symbol,
+                                'strike': strike,
+                                'status': 'open',
+                                'entry_date': str(row.get('Entry Date', '')),
+                                'entry_premium': entry_premium,
+                                'current_premium': current_premium,
+                                'quantity': quantity,
+                                'pnl': pnl
+                            })
+            except Exception as e:
+                logger.error(f"Failed to load open trades: {e}")
 
         # Sort by entry date, most recent first
-        trades.sort(key=lambda x: x['entry_date'], reverse=True)
+        trades.sort(key=lambda x: x.get('entry_date', ''), reverse=True)
 
         return jsonify({'trades': trades[:limit]})
 
@@ -1806,50 +1824,119 @@ def sync_positions_api():
 
 @app.route('/api/open_csps')
 def get_open_csps():
-    """Get updated open CSPs data for dashboard refresh"""
-    try:
-        from open_trade_monitor import load_trades_from_sheet, enrich_trade_with_live_data
+    """
+    Get updated open CSPs data with LIVE market data for dashboard refresh.
 
-        # Load trades
+    Query Parameters:
+        force_refresh: If 'true', bypass cache and fetch fresh data
+
+    Returns:
+        JSON with enriched CSP positions and summary statistics
+    """
+    try:
+        import asyncio
+        from open_trade_monitor import load_trades_from_sheet, enrich_trade_with_live_data
+        from schwab_utils import get_client
+        from datetime import datetime
+
+        force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
+
+        # Simple in-memory cache (5 minute TTL for normal requests)
+        cache_key = 'open_csps_data'
+        cache_ttl = 300  # 5 minutes
+
+        # Check cache unless force refresh
+        if not force_refresh and hasattr(get_open_csps, '_cache'):
+            cached = get_open_csps._cache.get(cache_key)
+            if cached and (datetime.now() - cached['timestamp']).total_seconds() < cache_ttl:
+                logger.info("Returning cached Open CSPs data")
+                return jsonify(cached['data'])
+
+        logger.info(f"Fetching fresh Open CSPs data (force_refresh={force_refresh})")
+
+        # Load trades from sheet
         df, _ = load_trades_from_sheet()
         if df is None or df.empty:
-            return jsonify({'csps': [], 'summary': {}})
+            return jsonify({'csps': [], 'summary': {}, 'last_updated': datetime.now().isoformat()})
 
-        # For now, use empty quotes (sheet data only)
+        # Get unique symbols to fetch quotes for
+        symbols = df['Symbol'].dropna().unique().tolist()
+
+        # Fetch live quotes from Schwab API
         quotes = {}
+        if symbols:
+            try:
+                client = get_client()
+                quote_resp = client.get_quotes(symbols)
+                if quote_resp.status_code == 200:
+                    quote_data = quote_resp.json()
+                    for sym, data in quote_data.items():
+                        if 'quote' in data:
+                            quotes[sym] = {
+                                'lastPrice': data['quote'].get('lastPrice', 0),
+                                'bidPrice': data['quote'].get('bidPrice', 0),
+                                'askPrice': data['quote'].get('askPrice', 0),
+                                'mark': data['quote'].get('mark', data['quote'].get('lastPrice', 0)),
+                            }
+                    logger.info(f"Fetched live quotes for {len(quotes)} symbols")
+            except Exception as e:
+                logger.warning(f"Failed to fetch quotes: {e}")
 
-        # Enrich data
+        # Enrich data with live market info
         enriched_rows = []
         for _, row in df.iterrows():
             enriched = enrich_trade_with_live_data(dict(row), quotes)
+            # Convert any date objects to strings for JSON serialization
+            for key, value in enriched.items():
+                if hasattr(value, 'strftime'):
+                    enriched[key] = value.strftime('%Y-%m-%d')
+                elif hasattr(value, 'isoformat'):
+                    enriched[key] = value.isoformat()
             enriched_rows.append(enriched)
 
-        # Calculate summary
-        total_credit = sum(float(r.get('_total_credit', 0)) for r in enriched_rows)
-        total_pl = sum(float(r.get('_pl_dollars', 0)) for r in enriched_rows)
-        avg_progress = sum(float(r.get('_progress_pct', 0)) for r in enriched_rows) / len(enriched_rows) if enriched_rows else 0
-        avg_dte = sum(float(r.get('_dte', 0)) for r in enriched_rows) / len(enriched_rows) if enriched_rows else 0
-        total_realized_theta = sum(float(r.get('_daily_theta_decay_dollars', 0)) for r in enriched_rows)
+        # Calculate summary statistics
+        total_credit = sum(float(r.get('_total_credit', 0) or 0) for r in enriched_rows)
+        total_pl = sum(float(r.get('_pl_dollars', 0) or 0) for r in enriched_rows)
+        avg_progress = sum(float(r.get('_progress_pct', 0) or 0) for r in enriched_rows) / len(enriched_rows) if enriched_rows else 0
+        avg_dte = sum(float(r.get('_dte', 0) or 0) for r in enriched_rows) / len(enriched_rows) if enriched_rows else 0
+        total_realized_theta = sum(float(r.get('_daily_theta_decay_dollars', 0) or 0) for r in enriched_rows)
         avg_theta_per_pos = total_realized_theta / len(enriched_rows) if enriched_rows else 0
-        total_expected_decay = sum(float(r.get('_forward_theta_daily', 0)) for r in enriched_rows)
-        projected_remaining = sum(float(r.get('_projected_decay', 0)) for r in enriched_rows)
+        total_expected_decay = sum(float(r.get('_forward_theta_daily', 0) or 0) for r in enriched_rows)
+        projected_remaining = sum(float(r.get('_projected_decay', 0) or 0) for r in enriched_rows)
 
         summary = {
             'positions_count': len(enriched_rows),
-            'total_credit': total_credit,
-            'total_pl': total_pl,
-            'avg_progress': avg_progress,
-            'avg_dte': avg_dte,
-            'total_realized_theta': total_realized_theta,
-            'avg_theta_per_pos': avg_theta_per_pos,
-            'total_expected_decay': total_expected_decay,
-            'projected_remaining': projected_remaining
+            'total_credit': round(total_credit, 2),
+            'total_pl': round(total_pl, 2),
+            'avg_progress': round(avg_progress, 1),
+            'avg_dte': round(avg_dte, 1),
+            'total_realized_theta': round(total_realized_theta, 2),
+            'avg_theta_per_pos': round(avg_theta_per_pos, 2),
+            'total_expected_decay': round(total_expected_decay, 2),
+            'projected_remaining': round(projected_remaining, 2)
         }
 
-        return jsonify({'csps': enriched_rows, 'summary': summary})
+        last_updated = datetime.now().isoformat()
+
+        response_data = {
+            'csps': enriched_rows,
+            'summary': summary,
+            'last_updated': last_updated,
+            'quotes_fetched': len(quotes)
+        }
+
+        # Cache the response
+        if not hasattr(get_open_csps, '_cache'):
+            get_open_csps._cache = {}
+        get_open_csps._cache[cache_key] = {
+            'data': response_data,
+            'timestamp': datetime.now()
+        }
+
+        return jsonify(response_data)
 
     except Exception as e:
-        logger.error(f"Failed to get open CSPs: {e}")
+        logger.error(f"Failed to get open CSPs: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
@@ -1862,12 +1949,12 @@ def get_chain_heatmap(symbol):
 
     Query Parameters:
         contract_type: 'PUT' or 'CALL' (default: 'PUT')
-        visualization: 'open_interest', 'volume', 'liquidity', 'iv_surface',
-                       'delta', 'gamma', 'theta', 'vega', 'dashboard' (default: 'open_interest')
+        viz_type: 'open_interest', 'volume', 'liquidity', 'iv_surface',
+                  'delta', 'gamma', 'theta', 'vega', 'dashboard' (default: 'open_interest')
         days_out: Days from now to fetch (default: 60)
 
     Returns:
-        JSON with heatmap HTML and DataFrame as JSON
+        JSON with heatmap plot data and analysis metrics
     """
     try:
         from chain_visualizer import fetch_option_chain_data, generate_chain_heatmap
@@ -1875,7 +1962,8 @@ def get_chain_heatmap(symbol):
 
         symbol = symbol.upper()
         contract_type = request.args.get('contract_type', 'PUT').upper()
-        visualization = request.args.get('visualization', 'open_interest')
+        # Support both 'viz_type' (frontend) and 'visualization' (legacy) parameter names
+        visualization = request.args.get('viz_type') or request.args.get('visualization', 'open_interest')
         days_out = int(request.args.get('days_out', 60))
 
         logger.info(f"API: Generating {visualization} heatmap for {symbol} {contract_type}s")
@@ -1907,34 +1995,57 @@ def get_chain_heatmap(symbol):
         if fig_json is None:
             return jsonify({'error': 'Failed to generate heatmap'}), 500
 
-        # Step 3: Parse the JSON figure and convert to HTML
-        import plotly.graph_objects as go
-        fig = go.Figure(json.loads(fig_json))
-        heatmap_html = fig.to_html(include_plotlyjs='cdn', full_html=False)
+        # Calculate analysis metrics from the DataFrame
+        underlying_price = df['underlying_price'].iloc[0] if 'underlying_price' in df.columns and len(df) > 0 else None
 
-        # Convert DataFrame to JSON for API response
-        df_json = df.to_dict('records')
+        # Calculate max pain (strike with minimum total value of options)
+        max_pain = None
+        try:
+            if 'strike' in df.columns:
+                strikes = df['strike'].unique()
+                min_pain_value = float('inf')
+                for strike in strikes:
+                    call_oi = df[df['strike'] >= strike]['call_open_interest'].sum()
+                    put_oi = df[df['strike'] <= strike]['put_open_interest'].sum()
+                    pain_value = call_oi + put_oi
+                    if pain_value < min_pain_value:
+                        min_pain_value = pain_value
+                        max_pain = float(strike)
+        except Exception as e:
+            logger.warning(f"Max pain calculation failed: {e}")
 
-        # Summary statistics
-        summary = {
-            'total_strikes': len(df),
-            'expirations': df['expiration'].nunique() if 'expiration' in df.columns else 0,
-            'avg_open_interest': float(df['call_open_interest'].mean() if contract_type == 'CALL' else df['put_open_interest'].mean()),
-            'avg_volume': float(df['call_volume'].mean() if contract_type == 'CALL' else df['put_volume'].mean()),
-            'symbol': symbol,
-            'contract_type': contract_type
-        }
+        # Calculate most liquid strike
+        most_liquid_strike = None
+        try:
+            if 'call_volume' in df.columns and 'put_volume' in df.columns:
+                df['total_volume'] = df['call_volume'].fillna(0) + df['put_volume'].fillna(0)
+                if df['total_volume'].max() > 0:
+                    most_liquid_idx = df['total_volume'].idxmax()
+                    most_liquid_strike = float(df.loc[most_liquid_idx, 'strike'])
+        except Exception as e:
+            logger.warning(f"Most liquid strike calculation failed: {e}")
 
-        logger.info(f"API: Heatmap generated - {len(df)} options across {summary['expirations']} expirations")
+        # Total OI calculations
+        total_calls_oi = int(df['call_open_interest'].sum()) if 'call_open_interest' in df.columns else 0
+        total_puts_oi = int(df['put_open_interest'].sum()) if 'put_open_interest' in df.columns else 0
+        put_call_ratio = round(total_puts_oi / total_calls_oi, 2) if total_calls_oi > 0 else 0
+
+        logger.info(f"API: Heatmap generated - {len(df)} options, max_pain=${max_pain}")
 
         return jsonify({
             'success': True,
             'symbol': symbol,
             'contract_type': contract_type,
             'visualization': visualization,
-            'heatmap_html': heatmap_html,
-            'data': df_json,
-            'summary': summary
+            'heatmap': fig_json,  # Raw JSON for Plotly (frontend expects this)
+            'current_price': underlying_price,
+            'max_pain': max_pain,
+            'liquidity_analysis': {
+                'most_liquid_strike': most_liquid_strike
+            },
+            'total_calls_oi': total_calls_oi,
+            'total_puts_oi': total_puts_oi,
+            'put_call_ratio': put_call_ratio
         }), 200
 
     except Exception as e:

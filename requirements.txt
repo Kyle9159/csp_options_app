@@ -32,7 +32,7 @@ pytz>=2023.3
 
 # Technical Analysis (Optional)
 scipy>=1.10.0
-trendln>=0.7.0  # For support/resistance level calculation
+trendln>=0.1.8  # For support/resistance level calculation
 
 # Visualization
 plotly>=5.18.0

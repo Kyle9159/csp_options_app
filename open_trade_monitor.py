@@ -471,9 +471,20 @@ async def update_sheet_with_live_data(df, ws):
     for idx, (_, row) in enumerate(df.iterrows()):
         sheet_row = idx + 2  # +1 for header, +1 for 1-based indexing
         print(f"📝 Processing row {sheet_row}: {row.get('Symbol', 'Unknown')}")
-        
+
         for col_name, col_idx in col_indices.items():
             value = row.get(col_name, '')
+            # Convert date/datetime objects to strings for JSON serialization
+            if hasattr(value, 'strftime'):
+                value = value.strftime('%Y-%m-%d')
+            elif hasattr(value, 'isoformat'):
+                value = value.isoformat()
+            # Handle numpy types
+            elif hasattr(value, 'item'):
+                value = value.item()
+            # Ensure value is JSON serializable
+            if value is None or (isinstance(value, float) and (value != value)):  # NaN check
+                value = ''
             cell = gspread.utils.rowcol_to_a1(sheet_row, col_idx)
             batch.append({
                 'range': cell,

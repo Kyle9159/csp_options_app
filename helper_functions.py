@@ -2,11 +2,19 @@ import pandas as pd
 from datetime import datetime
 
 def safe_float(value, default=0.0):
-    """Safely convert value to float"""
+    """Safely convert value to float, handling currency symbols and percentages"""
     try:
         if pd.isna(value) or value is None or value == '':
             return default
-        return float(value)
+        # If it's already a number, return it
+        if isinstance(value, (int, float)):
+            return float(value)
+        # Convert to string and strip currency/percentage symbols
+        str_val = str(value).strip()
+        str_val = str_val.replace('$', '').replace('%', '').replace(',', '').strip()
+        if str_val == '' or str_val == '-':
+            return default
+        return float(str_val)
     except (ValueError, TypeError):
         return default
 
@@ -60,7 +68,21 @@ def load_cached_scanner():
         cache_file = Path("cache_files") / "simple_scanner_cache.json"
         if cache_file.exists():
             with open(cache_file, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+
+                # Fix: Parse support_resistance if it's a string
+                if data:
+                    for tile in data:
+                        if 'suggestions' in tile:
+                            for opp in tile['suggestions']:
+                                if 'support_resistance' in opp and isinstance(opp['support_resistance'], str):
+                                    try:
+                                        # Parse the string representation back to dict
+                                        opp['support_resistance'] = eval(opp['support_resistance'])
+                                    except:
+                                        opp['support_resistance'] = {}
+
+                return data
     except Exception as e:
         print(f"Failed to load scanner cache: {e}")
     return None  # Return None to trigger fresh scan

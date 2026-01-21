@@ -243,24 +243,35 @@ def _create_oi_heatmap(df: pd.DataFrame, symbol: str) -> go.Figure:
         fill_value=0
     )
 
+    # Get strike values and ensure consistent ordering
+    strike_vals = sorted(pivot_calls.index.tolist())
+    pivot_calls = pivot_calls.reindex(strike_vals)
+    pivot_puts = pivot_puts.reindex(strike_vals)
+
+    # Format labels for display (categorical)
+    strike_labels = [f'${s:.0f}' for s in strike_vals]
+    exp_labels = [str(e)[:10] for e in pivot_calls.columns.tolist()]
+
     # Create figure with subplots (calls and puts side by side)
     from plotly.subplots import make_subplots
 
     fig = make_subplots(
         rows=1, cols=2,
         subplot_titles=('Call Open Interest', 'Put Open Interest'),
-        shared_yaxes=True
+        shared_yaxes=True,
+        horizontal_spacing=0.15
     )
 
-    # Add call heatmap
+    # Add call heatmap - use categorical labels directly
     fig.add_trace(
         go.Heatmap(
-            z=pivot_calls.values,
-            x=pivot_calls.columns,
-            y=pivot_calls.index,
+            z=pivot_calls.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
             colorscale='Greens',
             name='Calls',
-            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>OI: %{z}<extra></extra>'
+            colorbar=dict(title='OI', x=0.42, len=0.8),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>OI: %{z:,.0f}<extra></extra>'
         ),
         row=1, col=1
     )
@@ -268,25 +279,31 @@ def _create_oi_heatmap(df: pd.DataFrame, symbol: str) -> go.Figure:
     # Add put heatmap
     fig.add_trace(
         go.Heatmap(
-            z=pivot_puts.values,
-            x=pivot_puts.columns,
-            y=pivot_puts.index,
+            z=pivot_puts.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
             colorscale='Reds',
             name='Puts',
-            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>OI: %{z}<extra></extra>'
+            colorbar=dict(title='OI', x=1.02, len=0.8),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>OI: %{z:,.0f}<extra></extra>'
         ),
         row=1, col=2
     )
 
     fig.update_layout(
-        title=f'{symbol} Options Chain - Open Interest',
-        height=800,
-        showlegend=False
+        title=dict(text=f'{symbol} Options Chain - Open Interest', x=0.5, xanchor='center'),
+        height=650,
+        showlegend=False,
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        margin=dict(l=80, r=100, t=80, b=80)
     )
 
-    fig.update_xaxes(title_text="Expiration", row=1, col=1)
-    fig.update_xaxes(title_text="Expiration", row=1, col=2)
-    fig.update_yaxes(title_text="Strike Price", row=1, col=1)
+    # Update axes - categorical type for proper cell rendering
+    fig.update_xaxes(title_text="Expiration Date", type='category', tickangle=45, row=1, col=1)
+    fig.update_xaxes(title_text="Expiration Date", type='category', tickangle=45, row=1, col=2)
+    fig.update_yaxes(title_text="Strike Price", type='category', row=1, col=1)
+    fig.update_yaxes(type='category', row=1, col=2)
 
     return fig
 
@@ -309,41 +326,72 @@ def _create_volume_heatmap(df: pd.DataFrame, symbol: str) -> go.Figure:
         fill_value=0
     )
 
+    # Get strike values and ensure consistent ordering
+    strike_vals = sorted(pivot_calls.index.tolist())
+    pivot_calls = pivot_calls.reindex(strike_vals)
+    pivot_puts = pivot_puts.reindex(strike_vals)
+
+    # Format labels for display (categorical)
+    strike_labels = [f'${s:.0f}' for s in strike_vals]
+    exp_labels = [str(e)[:10] for e in pivot_calls.columns.tolist()]
+
+    # Check if data has meaningful values
+    has_data = pivot_calls.values.max() > 0 or pivot_puts.values.max() > 0
+
     from plotly.subplots import make_subplots
 
     fig = make_subplots(
         rows=1, cols=2,
         subplot_titles=('Call Volume', 'Put Volume'),
-        shared_yaxes=True
+        shared_yaxes=True,
+        horizontal_spacing=0.15
     )
 
     fig.add_trace(
         go.Heatmap(
-            z=pivot_calls.values,
-            x=pivot_calls.columns,
-            y=pivot_calls.index,
+            z=pivot_calls.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
             colorscale='Blues',
-            name='Calls'
+            name='Calls',
+            colorbar=dict(title='Vol', x=0.42, len=0.8),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>Volume: %{z:,.0f}<extra></extra>'
         ),
         row=1, col=1
     )
 
     fig.add_trace(
         go.Heatmap(
-            z=pivot_puts.values,
-            x=pivot_puts.columns,
-            y=pivot_puts.index,
+            z=pivot_puts.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
             colorscale='Oranges',
-            name='Puts'
+            name='Puts',
+            colorbar=dict(title='Vol', x=1.02, len=0.8),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>Volume: %{z:,.0f}<extra></extra>'
         ),
         row=1, col=2
     )
 
+    # Build title with data status warning
+    title_text = f'{symbol} Options Chain - Volume'
+    if not has_data:
+        title_text += '<br><span style="color:orange;font-size:12px;">⚠️ No volume data - Market may be closed</span>'
+
     fig.update_layout(
-        title=f'{symbol} Options Chain - Volume',
-        height=800,
-        showlegend=False
+        title=dict(text=title_text, x=0.5, xanchor='center'),
+        height=650,
+        showlegend=False,
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        margin=dict(l=80, r=100, t=80, b=80)
     )
+
+    # Update axes - categorical type for proper cell rendering
+    fig.update_xaxes(title_text="Expiration Date", type='category', tickangle=45, row=1, col=1)
+    fig.update_xaxes(title_text="Expiration Date", type='category', tickangle=45, row=1, col=2)
+    fig.update_yaxes(title_text="Strike Price", type='category', row=1, col=1)
+    fig.update_yaxes(type='category', row=1, col=2)
 
     return fig
 
@@ -351,6 +399,7 @@ def _create_volume_heatmap(df: pd.DataFrame, symbol: str) -> go.Figure:
 def _create_liquidity_heatmap(df: pd.DataFrame, symbol: str) -> go.Figure:
     """Create liquidity heatmap (based on bid-ask spread)"""
     # Calculate bid-ask spread percentage
+    df = df.copy()
     df['call_spread_pct'] = ((df['call_ask'] - df['call_bid']) / df['call_bid'] * 100).fillna(0)
     df['put_spread_pct'] = ((df['put_ask'] - df['put_bid']) / df['put_bid'] * 100).fillna(0)
 
@@ -370,41 +419,64 @@ def _create_liquidity_heatmap(df: pd.DataFrame, symbol: str) -> go.Figure:
         fill_value=0
     )
 
+    # Get strike values and ensure consistent ordering
+    strike_vals = sorted(pivot_calls.index.tolist())
+    pivot_calls = pivot_calls.reindex(strike_vals)
+    pivot_puts = pivot_puts.reindex(strike_vals)
+
+    # Format labels for display (categorical)
+    strike_labels = [f'${s:.0f}' for s in strike_vals]
+    exp_labels = [str(e)[:10] for e in pivot_calls.columns.tolist()]
+
     from plotly.subplots import make_subplots
 
     fig = make_subplots(
         rows=1, cols=2,
         subplot_titles=('Call Liquidity (Lower % = Better)', 'Put Liquidity'),
-        shared_yaxes=True
+        shared_yaxes=True,
+        horizontal_spacing=0.15
     )
 
     fig.add_trace(
         go.Heatmap(
-            z=pivot_calls.values,
-            x=pivot_calls.columns,
-            y=pivot_calls.index,
+            z=pivot_calls.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
             colorscale='RdYlGn_r',  # Reverse: red=high spread (bad), green=low spread (good)
-            name='Calls'
+            name='Calls',
+            colorbar=dict(title='Spread %', x=0.42, len=0.8),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>Spread: %{z:.1f}%<extra></extra>'
         ),
         row=1, col=1
     )
 
     fig.add_trace(
         go.Heatmap(
-            z=pivot_puts.values,
-            x=pivot_puts.columns,
-            y=pivot_puts.index,
+            z=pivot_puts.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
             colorscale='RdYlGn_r',
-            name='Puts'
+            name='Puts',
+            colorbar=dict(title='Spread %', x=1.02, len=0.8),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>Spread: %{z:.1f}%<extra></extra>'
         ),
         row=1, col=2
     )
 
     fig.update_layout(
-        title=f'{symbol} Options Chain - Liquidity (Bid-Ask Spread %)',
-        height=800,
-        showlegend=False
+        title=dict(text=f'{symbol} Options Chain - Liquidity (Bid-Ask Spread %)', x=0.5, xanchor='center'),
+        height=650,
+        showlegend=False,
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        margin=dict(l=80, r=100, t=80, b=80)
     )
+
+    # Update axes - categorical type for proper cell rendering
+    fig.update_xaxes(title_text="Expiration Date", type='category', tickangle=45, row=1, col=1)
+    fig.update_xaxes(title_text="Expiration Date", type='category', tickangle=45, row=1, col=2)
+    fig.update_yaxes(title_text="Strike Price", type='category', row=1, col=1)
+    fig.update_yaxes(type='category', row=1, col=2)
 
     return fig
 
@@ -412,6 +484,7 @@ def _create_liquidity_heatmap(df: pd.DataFrame, symbol: str) -> go.Figure:
 def _create_iv_surface(df: pd.DataFrame, symbol: str) -> go.Figure:
     """Create 3D IV surface plot"""
     # Average call and put IV
+    df = df.copy()
     df['avg_iv'] = (df['call_iv'] + df['put_iv']) / 2
 
     # Create 3D surface
@@ -423,22 +496,39 @@ def _create_iv_surface(df: pd.DataFrame, symbol: str) -> go.Figure:
         fill_value=0
     )
 
+    # Format labels
+    strike_labels = [f'${s:.0f}' for s in pivot.index.tolist()]
+    exp_labels = [str(e)[:10] for e in pivot.columns.tolist()]
+
+    # Check if IV data exists
+    has_data = pivot.values.max() > 0.01
+
     fig = go.Figure(data=[go.Surface(
         z=pivot.values,
         x=list(range(len(pivot.columns))),
         y=pivot.index,
         colorscale='Viridis',
-        hovertemplate='Strike: %{y}<br>IV: %{z:.2%}<extra></extra>'
+        hovertemplate='Strike: $%{y:.0f}<br>IV: %{z:.1f}%<extra></extra>'
     )])
 
+    title_text = f'{symbol} Implied Volatility Surface'
+    if not has_data:
+        title_text += '<br><span style="color:orange;font-size:12px;">⚠️ Limited IV data - Market may be closed</span>'
+
     fig.update_layout(
-        title=f'{symbol} Implied Volatility Surface',
+        title=dict(text=title_text, x=0.5, xanchor='center'),
         scene=dict(
-            xaxis_title='Expiration (index)',
-            yaxis_title='Strike Price',
-            zaxis_title='Implied Volatility'
+            xaxis_title='Expiration',
+            xaxis=dict(
+                ticktext=exp_labels,
+                tickvals=list(range(len(exp_labels))),
+                tickangle=45
+            ),
+            yaxis_title='Strike Price ($)',
+            zaxis_title='Implied Volatility (%)'
         ),
-        height=800
+        height=700,
+        paper_bgcolor='white'
     )
 
     return fig
@@ -466,41 +556,74 @@ def _create_greeks_heatmap(df: pd.DataFrame, greek: str, symbol: str) -> go.Figu
         fill_value=0
     )
 
+    # Get strike values and ensure consistent ordering
+    strike_vals = sorted(pivot_calls.index.tolist())
+    pivot_calls = pivot_calls.reindex(strike_vals)
+    pivot_puts = pivot_puts.reindex(strike_vals)
+
+    # Format labels for display (categorical)
+    strike_labels = [f'${s:.0f}' for s in strike_vals]
+    exp_labels = [str(e)[:10] for e in pivot_calls.columns.tolist()]
+
     from plotly.subplots import make_subplots
 
     fig = make_subplots(
         rows=1, cols=2,
         subplot_titles=(f'Call {greek.capitalize()}', f'Put {greek.capitalize()}'),
-        shared_yaxes=True
+        shared_yaxes=True,
+        horizontal_spacing=0.15
     )
+
+    # Check if data has meaningful values (not all zeros)
+    calls_max = abs(pivot_calls.values).max() if pivot_calls.size > 0 else 0
+    puts_max = abs(pivot_puts.values).max() if pivot_puts.size > 0 else 0
+    has_data = calls_max > 0.001 or puts_max > 0.001
 
     fig.add_trace(
         go.Heatmap(
-            z=pivot_calls.values,
-            x=pivot_calls.columns,
-            y=pivot_calls.index,
+            z=pivot_calls.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
             colorscale='RdBu',
-            name='Calls'
+            name='Calls',
+            colorbar=dict(title=greek.capitalize(), x=0.42, len=0.8),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>' + greek.capitalize() + ': %{z:.4f}<extra></extra>'
         ),
         row=1, col=1
     )
 
     fig.add_trace(
         go.Heatmap(
-            z=pivot_puts.values,
-            x=pivot_puts.columns,
-            y=pivot_puts.index,
+            z=pivot_puts.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
             colorscale='RdBu',
-            name='Puts'
+            name='Puts',
+            colorbar=dict(title=greek.capitalize(), x=1.02, len=0.8),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>' + greek.capitalize() + ': %{z:.4f}<extra></extra>'
         ),
         row=1, col=2
     )
 
+    # Build title with data status warning
+    title_text = f'{symbol} Options Chain - {greek.capitalize()}'
+    if not has_data:
+        title_text += '<br><span style="color:orange;font-size:12px;">⚠️ Limited data - Market may be closed or Greeks unavailable</span>'
+
     fig.update_layout(
-        title=f'{symbol} Options Chain - {greek.capitalize()}',
-        height=800,
-        showlegend=False
+        title=dict(text=title_text, x=0.5, xanchor='center'),
+        height=650,
+        showlegend=False,
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        margin=dict(l=80, r=100, t=80, b=80)
     )
+
+    # Update axes - categorical type for proper cell rendering
+    fig.update_xaxes(title_text='Expiration Date', type='category', tickangle=45, row=1, col=1)
+    fig.update_xaxes(title_text='Expiration Date', type='category', tickangle=45, row=1, col=2)
+    fig.update_yaxes(title_text='Strike Price', type='category', row=1, col=1)
+    fig.update_yaxes(type='category', row=1, col=2)
 
     return fig
 
@@ -509,14 +632,12 @@ def _create_dashboard_view(df: pd.DataFrame, symbol: str) -> go.Figure:
     """Create multi-panel dashboard view"""
     from plotly.subplots import make_subplots
 
-    fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=('Open Interest', 'Volume', 'IV', 'Delta'),
-        specs=[[{'type': 'heatmap'}, {'type': 'heatmap'}],
-               [{'type': 'heatmap'}, {'type': 'heatmap'}]]
-    )
+    # Ensure we have required columns
+    for col in ['call_open_interest', 'call_volume', 'call_iv', 'call_delta']:
+        if col not in df.columns:
+            df[col] = 0
 
-    # OI
+    # OI pivot
     pivot_oi = df.pivot_table(
         values='call_open_interest',
         index='strike',
@@ -524,12 +645,8 @@ def _create_dashboard_view(df: pd.DataFrame, symbol: str) -> go.Figure:
         aggfunc='sum',
         fill_value=0
     )
-    fig.add_trace(
-        go.Heatmap(z=pivot_oi.values, x=pivot_oi.columns, y=pivot_oi.index, colorscale='Greens', showscale=False),
-        row=1, col=1
-    )
 
-    # Volume
+    # Volume pivot
     pivot_vol = df.pivot_table(
         values='call_volume',
         index='strike',
@@ -537,12 +654,8 @@ def _create_dashboard_view(df: pd.DataFrame, symbol: str) -> go.Figure:
         aggfunc='sum',
         fill_value=0
     )
-    fig.add_trace(
-        go.Heatmap(z=pivot_vol.values, x=pivot_vol.columns, y=pivot_vol.index, colorscale='Blues', showscale=False),
-        row=1, col=2
-    )
 
-    # IV
+    # IV pivot
     pivot_iv = df.pivot_table(
         values='call_iv',
         index='strike',
@@ -550,12 +663,8 @@ def _create_dashboard_view(df: pd.DataFrame, symbol: str) -> go.Figure:
         aggfunc='mean',
         fill_value=0
     )
-    fig.add_trace(
-        go.Heatmap(z=pivot_iv.values, x=pivot_iv.columns, y=pivot_iv.index, colorscale='Viridis', showscale=False),
-        row=2, col=1
-    )
 
-    # Delta
+    # Delta pivot
     pivot_delta = df.pivot_table(
         values='call_delta',
         index='strike',
@@ -563,16 +672,139 @@ def _create_dashboard_view(df: pd.DataFrame, symbol: str) -> go.Figure:
         aggfunc='mean',
         fill_value=0
     )
+
+    # Check if pivot is empty
+    if pivot_oi.empty or len(pivot_oi.index) == 0:
+        logger.warning(f"No data to display for {symbol} dashboard")
+        # Return empty figure with message
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"No options data available for {symbol}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=20, color="orange")
+        )
+        fig.update_layout(height=650, paper_bgcolor='white')
+        return fig
+
+    # Get strike values and expiration labels
+    strike_vals = sorted(pivot_oi.index.tolist())  # Ensure sorted for proper display
+    exp_labels = [str(e)[:10] for e in pivot_oi.columns.tolist()]
+    num_exps = len(exp_labels)
+    num_strikes = len(strike_vals)
+
+    # Format strike labels for display
+    strike_labels = [f'${s:.0f}' for s in strike_vals]
+
+    logger.info(f"Dashboard: {num_strikes} strikes x {num_exps} expirations")
+    logger.info(f"Strike range: ${min(strike_vals):.0f} - ${max(strike_vals):.0f}")
+
+    # Reindex pivots to ensure consistent ordering
+    pivot_oi = pivot_oi.reindex(strike_vals)
+    pivot_vol = pivot_vol.reindex(strike_vals)
+    pivot_iv = pivot_iv.reindex(strike_vals)
+    pivot_delta = pivot_delta.reindex(strike_vals)
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=('Open Interest (Calls)', 'Volume (Calls)', 'Implied Volatility', 'Delta'),
+        vertical_spacing=0.15,
+        horizontal_spacing=0.12
+    )
+
+    # Use categorical x (expiration) and y (strike) axes for heatmaps
+    # This ensures proper cell rendering regardless of numeric spacing
+
+    # OI Heatmap
     fig.add_trace(
-        go.Heatmap(z=pivot_delta.values, x=pivot_delta.columns, y=pivot_delta.index, colorscale='RdBu', showscale=False),
+        go.Heatmap(
+            z=pivot_oi.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
+            colorscale='Greens',
+            showscale=True,
+            colorbar=dict(title='OI', x=0.45, y=0.8, len=0.3),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>OI: %{z:,.0f}<extra></extra>'
+        ),
+        row=1, col=1
+    )
+
+    # Volume Heatmap
+    fig.add_trace(
+        go.Heatmap(
+            z=pivot_vol.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
+            colorscale='Blues',
+            showscale=True,
+            colorbar=dict(title='Vol', x=1.02, y=0.8, len=0.3),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>Volume: %{z:,.0f}<extra></extra>'
+        ),
+        row=1, col=2
+    )
+
+    # IV Heatmap
+    fig.add_trace(
+        go.Heatmap(
+            z=pivot_iv.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(title='IV%', x=0.45, y=0.2, len=0.3),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>IV: %{z:.1f}%<extra></extra>'
+        ),
+        row=2, col=1
+    )
+
+    # Delta Heatmap
+    fig.add_trace(
+        go.Heatmap(
+            z=pivot_delta.values.tolist(),
+            x=exp_labels,
+            y=strike_labels,
+            colorscale='RdBu',
+            showscale=True,
+            colorbar=dict(title='Delta', x=1.02, y=0.2, len=0.3),
+            hovertemplate='Strike: %{y}<br>Exp: %{x}<br>Delta: %{z:.3f}<extra></extra>'
+        ),
         row=2, col=2
     )
 
+    # Check if we have meaningful data
+    has_oi = pivot_oi.values.max() > 0
+    has_vol = pivot_vol.values.max() > 0
+    has_iv = pivot_iv.values.max() > 0.01
+    has_delta = abs(pivot_delta.values).max() > 0.001
+
+    title_text = f'{symbol} Options Chain Dashboard'
+    if not (has_oi and has_vol and has_iv and has_delta):
+        title_text += '<br><span style="color:orange;font-size:11px;">⚠️ Some data limited - Market may be closed</span>'
+
     fig.update_layout(
-        title=f'{symbol} Options Chain Dashboard',
-        height=1000,
-        showlegend=False
+        title=dict(text=title_text, x=0.5, xanchor='center', font=dict(size=16)),
+        height=650,
+        width=None,  # Auto width
+        showlegend=False,
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        margin=dict(l=80, r=100, t=80, b=80)
     )
+
+    # Update axes - using categorical data, so set type explicitly
+    for row in [1, 2]:
+        for col in [1, 2]:
+            fig.update_xaxes(
+                type='category',
+                tickangle=45,
+                tickfont=dict(size=8),
+                row=row, col=col
+            )
+            fig.update_yaxes(
+                type='category',
+                tickfont=dict(size=8),
+                row=row, col=col
+            )
 
     return fig
 

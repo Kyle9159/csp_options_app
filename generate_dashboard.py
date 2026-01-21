@@ -1001,7 +1001,7 @@ def generate_html():
                     transition: max-height 0.4s ease;
                 }
                 .accordion-content.open {
-                    max-height: 2000px;
+                    max-height: 3500px;
                     padding: 20px;
                 }
                 .action-buttons {
@@ -2474,9 +2474,52 @@ def generate_html():
                                                         </div>
 
                                                         <!-- Grok Recommendation -->
-                                                        <div style="margin-top:16px; padding:14px; background:rgba(16,78,59,0.8); border-radius:10px; border-left:4px solid #34d399; word-wrap:break-word; white-space:normal; overflow:visible;">
-                                                            <strong style="color:#34d399; font-size:1.1rem;">🤖 {{ opp.grok_recommendation|default('N/A') }}</strong><br>
-                                                            <span style="color:#d1fae5; line-height:1.6;">{{ opp.grok_reason|default('') }}</span>
+                                                        <div style="margin-top:16px; padding:16px; background:rgba(16,78,59,0.8); border-radius:12px; border-left:4px solid #34d399; word-wrap:break-word; white-space:normal; overflow:visible;">
+                                                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                                                                <strong style="color:#34d399; font-size:1.1rem;">🤖 {{ opp.grok_recommendation|default('N/A') }}</strong>
+                                                                <span style="background:rgba(52,211,153,0.2); padding:4px 12px; border-radius:6px; color:#6ee7b7; font-size:0.9rem; font-weight:600;">
+                                                                    Profit Prob: {{ opp.grok_profit_prob|default('N/A') }}
+                                                                </span>
+                                                            </div>
+                                                            <div style="color:#d1fae5; line-height:1.7; margin-bottom:12px; font-size:0.95rem;">
+                                                                {{ opp.grok_reason|default('No analysis available') }}
+                                                            </div>
+
+                                                            <!-- Technical Details Grid -->
+                                                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:12px; border-top:1px solid rgba(52,211,153,0.3); font-size:0.85rem;">
+                                                                <div style="color:#a7f3d0;">
+                                                                    <strong>📊 Current Price:</strong><br>
+                                                                    ${{ opp.current_price|safe_format("%.2f") }}
+                                                                </div>
+                                                                <div style="color:#a7f3d0;">
+                                                                    <strong>🎯 S/R Risk:</strong><br>
+                                                                    {{ opp.sr_risk_flag|default('Unknown') }}
+                                                                </div>
+                                                                <div style="color:#a7f3d0;">
+                                                                    <strong>📈 RSI:</strong><br>
+                                                                    {{ opp.rsi|safe_format("%.1f") }}
+                                                                </div>
+                                                                <div style="color:#a7f3d0;">
+                                                                    <strong>💹 IV Rank:</strong><br>
+                                                                    {{ opp.iv|safe_format("%.0f") }}%
+                                                                </div>
+                                                            </div>
+
+                                                            <!-- Support/Resistance Levels -->
+                                                            {% if opp.support_resistance and '3' in opp.support_resistance %}
+                                                            {% set sr_3m = opp.support_resistance['3'] %}
+                                                            <div style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(52,211,153,0.3);">
+                                                                <div style="color:#6ee7b7; font-weight:600; margin-bottom:6px; font-size:0.85rem;">📍 Key Levels (3-Month):</div>
+                                                                <div style="display:flex; gap:16px; font-size:0.85rem; color:#a7f3d0;">
+                                                                    {% if sr_3m.support is defined %}
+                                                                    <div>Support: <strong style="color:#34d399;">${{ sr_3m.support|safe_format("%.2f") }}</strong></div>
+                                                                    {% endif %}
+                                                                    {% if sr_3m.resistance is defined %}
+                                                                    <div>Resistance: <strong style="color:#fb923c;">${{ sr_3m.resistance|safe_format("%.2f") }}</strong></div>
+                                                                    {% endif %}
+                                                                </div>
+                                                            </div>
+                                                            {% endif %}
                                                         </div>
 
                                                         <!-- Live Pricing Info -->
@@ -2617,6 +2660,78 @@ def generate_html():
                                     <div class="detail-row">
                                         <strong>Approx Prob:</strong> 
                                         <span class="prob">{{ opp.prob_approx }}%</span>
+                                    </div>
+                                </div>
+
+                                <!-- Grok Quick Recommendation -->
+                                <div class="grok-recommendation" style="margin:16px 0; padding:14px; background:linear-gradient(135deg, rgba(16,185,129,0.2), rgba(52,211,153,0.1)); border-radius:12px; border-left:4px solid #10b981;">
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                        <strong style="color:#34d399; font-size:1.1rem;">🎯 Quick Trade Suggestion</strong>
+                                    </div>
+
+                                    {% set grok_rec = opp.grok_recommendation|default({}) %}
+                                    {% set rec_side = grok_rec.recommendation|default('NEUTRAL') %}
+                                    {% set rec_confidence = grok_rec.confidence|default(3) %}
+                                    {% set rec_reasoning = grok_rec.reasoning|default('Analysis pending...') %}
+
+                                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:0.95rem;">
+                                        <!-- SELL PUT side -->
+                                        <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; position:relative;
+                                            {% if rec_side == 'SELL_PUT' %}
+                                            border:2px solid #34d399; box-shadow:0 0 15px rgba(52,211,153,0.4);
+                                            {% endif %}">
+                                            {% if rec_side == 'SELL_PUT' %}
+                                            <div style="position:absolute; top:-10px; right:8px; background:linear-gradient(135deg, #10b981, #34d399); color:white; padding:3px 10px; border-radius:12px; font-size:0.7rem; font-weight:bold;">
+                                                🤖 GROK PICK
+                                            </div>
+                                            {% endif %}
+                                            <div style="color:#94a3b8; font-size:0.8rem; margin-bottom:4px;">SELL PUT</div>
+                                            <div style="color:#34d399; font-weight:bold; font-size:1.1rem;">${{ opp.short_put }} Strike</div>
+                                            <div style="color:#a7f3d0; font-size:0.85rem;">Credit: ${{ (opp.total_credit * 0.4)|round(2) }}</div>
+                                        </div>
+                                        <!-- SELL CALL side -->
+                                        <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; position:relative;
+                                            {% if rec_side == 'SELL_CALL' %}
+                                            border:2px solid #fb923c; box-shadow:0 0 15px rgba(251,146,60,0.4);
+                                            {% endif %}">
+                                            {% if rec_side == 'SELL_CALL' %}
+                                            <div style="position:absolute; top:-10px; right:8px; background:linear-gradient(135deg, #f97316, #fb923c); color:white; padding:3px 10px; border-radius:12px; font-size:0.7rem; font-weight:bold;">
+                                                🤖 GROK PICK
+                                            </div>
+                                            {% endif %}
+                                            <div style="color:#94a3b8; font-size:0.8rem; margin-bottom:4px;">SELL CALL</div>
+                                            <div style="color:#fb923c; font-weight:bold; font-size:1.1rem;">${{ opp.short_call }} Strike</div>
+                                            <div style="color:#fed7aa; font-size:0.85rem;">Credit: ${{ (opp.total_credit * 0.6)|round(2) }}</div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Grok Recommendation Reasoning -->
+                                    {% if rec_side != 'NEUTRAL' %}
+                                    <div style="margin-top:14px; padding:12px; background:linear-gradient(135deg, rgba(139,92,246,0.15), rgba(168,85,247,0.1)); border-radius:10px; border-left:3px solid #a78bfa;">
+                                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                                            <span style="font-size:1rem;">🧠</span>
+                                            <strong style="color:#c4b5fd; font-size:0.9rem;">Grok's Recommendation</strong>
+                                            <span style="background:{% if rec_side == 'SELL_PUT' %}rgba(52,211,153,0.3){% else %}rgba(251,146,60,0.3){% endif %}; color:{% if rec_side == 'SELL_PUT' %}#34d399{% else %}#fb923c{% endif %}; padding:2px 8px; border-radius:4px; font-size:0.8rem; font-weight:bold;">
+                                                {{ rec_side|replace('_', ' ') }}
+                                            </span>
+                                            <span style="color:#94a3b8; font-size:0.75rem; margin-left:auto;">
+                                                Confidence: {% for i in range(rec_confidence) %}⭐{% endfor %}{% for i in range(5 - rec_confidence) %}☆{% endfor %}
+                                            </span>
+                                        </div>
+                                        <p style="color:#e9d5ff; font-size:0.85rem; margin:0; line-height:1.4;">{{ rec_reasoning }}</p>
+                                    </div>
+                                    {% endif %}
+
+                                    <div style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(52,211,153,0.3);">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <div>
+                                                <span style="color:#94a3b8; font-size:0.85rem;">Exit Target (60% profit):</span>
+                                                <strong style="color:#34d399; margin-left:8px;">${{ (opp.total_credit * 0.4)|round(2) }}</strong>
+                                            </div>
+                                            <div style="background:rgba(52,211,153,0.2); padding:6px 12px; border-radius:6px;">
+                                                <span style="color:#6ee7b7; font-size:0.9rem; font-weight:600;">{{ opp.prob_approx }}% Win Prob</span>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -2763,7 +2878,29 @@ def generate_html():
                 <!-- Open CSPs -->
                 <div id="open" class="tab-content">
                     <h2 style="color:#34d399;">📉 Open Cash-Secured Puts</h2>
-                    
+
+                    <!-- Live Refresh Controls -->
+                    <div class="refresh-controls" style="display:flex; align-items:center; gap:20px; margin-bottom:20px; padding:15px; background:rgba(52,211,153,0.1); border-radius:12px; border:1px solid #34d399;">
+                        <button id="csp-refresh-btn" onclick="refreshOpenCSPs(true)" style="padding:10px 20px; background:linear-gradient(135deg,#34d399,#10b981); color:#064e3b; border:none; border-radius:8px; cursor:pointer; font-weight:600; display:flex; align-items:center; gap:8px;">
+                            <span id="csp-refresh-icon">🔄</span> Refresh Now
+                        </button>
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <label style="color:#e2e8f0;">Auto-refresh:</label>
+                            <select id="csp-auto-refresh" onchange="setAutoRefresh(this.value)" style="padding:8px 12px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px;">
+                                <option value="0">Off</option>
+                                <option value="300000">5 min</option>
+                                <option value="600000" selected>10 min</option>
+                                <option value="900000">15 min</option>
+                            </select>
+                        </div>
+                        <div id="csp-last-updated" style="color:#94a3b8; font-size:0.9rem; margin-left:auto;">
+                            Last updated: <span id="csp-update-time">{{ now if now else 'N/A' }}</span>
+                        </div>
+                        <div id="csp-refresh-status" style="color:#34d399; font-size:0.9rem; display:none;">
+                            <span class="loading-dots">Refreshing</span>
+                        </div>
+                    </div>
+
                     <!-- Portfolio Summary Tile -->
                     {% if open_trades %}
                         {% set total_positions = open_trades|length %}
@@ -3137,8 +3274,8 @@ def generate_html():
                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin:10px 0;">
                                         <div>
                                             <strong>Current Mark:</strong>
-                                            <span style="color:#fbbf24; font-size:1.1rem;">{{ trade['Current Mark']|default('$0.00') }}</span><br>
-                                            <strong>Bid/Ask:</strong> {{ trade['Bid']|default('$0.00') }} / {{ trade['Ask']|default('$0.00') }}
+                                            <span data-field="current-mark" style="color:#fbbf24; font-size:1.1rem;">{{ trade['Current Mark']|default('$0.00') }}</span><br>
+                                            <strong>Bid/Ask:</strong> <span data-field="bid-ask">{{ trade['Bid']|default('$0.00') }} / {{ trade['Ask']|default('$0.00') }}</span>
                                             {% if trade['_using_fallback_quotes']|default(false) %}
                                                 <div class="quote-note">
                                                     ⚠️ Market Closed — Showing Last Known Values
@@ -3147,7 +3284,7 @@ def generate_html():
                                         </div>
                                         <div>
                                             <strong>P/L:</strong>
-                                            <span style="{% if pl_dollars >= 0 %}color:#34d399{% else %}color:#fb923c{% endif %}; font-size:1.1rem;">
+                                            <span data-field="pl" style="{% if pl_dollars >= 0 %}color:#34d399{% else %}color:#fb923c{% endif %}; font-size:1.1rem;">
                                                 {% if pl_dollars >= 0 %}+{% endif %}${{ pl_dollars|abs|safe_format("%.0f") }}
                                             </span>
                                         </div>
@@ -3157,11 +3294,11 @@ def generate_html():
                                     <div class="theta-row">
                                         <div>
                                             <strong style="color:#d1fae5;">⏳ Daily Theta Decay ($)</strong><br>
-                                            <span style="color:#34d399; font-size:1.3rem;">${{ daily_theta|safe_format("%.3f") }}</span>
+                                            <span data-field="daily-theta" style="color:#34d399; font-size:1.3rem;">${{ daily_theta|safe_format("%.3f") }}</span>
                                         </div>
                                         <div>
                                             <strong style="color:#d1fae5;">Projected Daily Decay ($)</strong><br>
-                                            <span style="color:#34d399; font-size:1.3rem;">${{ forward_theta|safe_format("%.2f") }}</span>
+                                            <span data-field="forward-theta" style="color:#34d399; font-size:1.3rem;">${{ forward_theta|safe_format("%.2f") }}</span>
                                         </div>
                                     </div>
 
@@ -3239,6 +3376,190 @@ def generate_html():
                     {% else %}
                         <div class="empty">No open cash-secured puts at this time.</div>
                     {% endif %}
+
+                    <!-- CSP Dynamic Refresh JavaScript -->
+                    <script>
+                    // Auto-refresh interval tracker
+                    let cspAutoRefreshInterval = null;
+
+                    // Initialize auto-refresh on page load (10 min default)
+                    document.addEventListener('DOMContentLoaded', function() {
+                        setAutoRefresh(600000);  // 10 minutes default
+                    });
+
+                    function setAutoRefresh(intervalMs) {
+                        // Clear existing interval
+                        if (cspAutoRefreshInterval) {
+                            clearInterval(cspAutoRefreshInterval);
+                            cspAutoRefreshInterval = null;
+                        }
+
+                        // Set new interval if not 0
+                        if (intervalMs && parseInt(intervalMs) > 0) {
+                            cspAutoRefreshInterval = setInterval(() => refreshOpenCSPs(false), parseInt(intervalMs));
+                            console.log('CSP auto-refresh set to', intervalMs, 'ms');
+                        } else {
+                            console.log('CSP auto-refresh disabled');
+                        }
+                    }
+
+                    async function refreshOpenCSPs(forceRefresh = false) {
+                        const refreshBtn = document.getElementById('csp-refresh-btn');
+                        const refreshIcon = document.getElementById('csp-refresh-icon');
+                        const refreshStatus = document.getElementById('csp-refresh-status');
+                        const updateTimeEl = document.getElementById('csp-update-time');
+
+                        // Show loading state
+                        if (refreshBtn) refreshBtn.disabled = true;
+                        if (refreshIcon) refreshIcon.innerHTML = '⏳';
+                        if (refreshStatus) refreshStatus.style.display = 'inline';
+
+                        try {
+                            const url = forceRefresh ? '/api/open_csps?force_refresh=true' : '/api/open_csps';
+                            const response = await fetch(url);
+                            const data = await response.json();
+
+                            if (data.error) {
+                                throw new Error(data.error);
+                            }
+
+                            // Update the summary section
+                            updateCSPSummary(data.summary);
+
+                            // Update the CSP tiles
+                            updateCSPTiles(data.csps);
+
+                            // Update last refresh time
+                            if (updateTimeEl) {
+                                const now = new Date();
+                                updateTimeEl.textContent = now.toLocaleTimeString();
+                            }
+
+                            console.log('CSP refresh complete:', data.csps.length, 'positions,', data.quotes_fetched, 'live quotes');
+
+                        } catch (error) {
+                            console.error('CSP refresh failed:', error);
+                            alert('Failed to refresh CSPs: ' + error.message);
+                        } finally {
+                            // Restore button state
+                            if (refreshBtn) refreshBtn.disabled = false;
+                            if (refreshIcon) refreshIcon.innerHTML = '🔄';
+                            if (refreshStatus) refreshStatus.style.display = 'none';
+                        }
+                    }
+
+                    function updateCSPSummary(summary) {
+                        // Find and update the summary tile if it exists
+                        const summaryTile = document.querySelector('.tile_summary');
+                        if (!summaryTile || !summary) return;
+
+                        // Update the key values in the summary
+                        const summaryHTML = `
+                            <h3 style="color:#34d399; margin-top:0;">📊 Open CSP Portfolio Summary (${summary.positions_count} positions)</h3>
+                            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap:20px;">
+                                <div>
+                                    <strong>Total Credit Received:</strong> <span style="color:#34d399; font-size:1.2rem;">$${summary.total_credit.toLocaleString()}</span><br>
+                                    <strong>Current P/L:</strong>
+                                    <span style="${summary.total_pl >= 0 ? 'color:#34d399' : 'color:#fb923c'}; font-size:1.2rem;">
+                                        ${summary.total_pl >= 0 ? '+' : ''}$${Math.abs(summary.total_pl).toLocaleString()}
+                                    </span>
+                                </div>
+                                <div>
+                                    <strong>Avg Progress to Target:</strong> <span style="color:#fbbf24;">${summary.avg_progress}%</span><br>
+                                    <strong>Avg DTE:</strong> <span style="color:#a7f3d0;">${summary.avg_dte} days</span>
+                                </div>
+                                <div>
+                                    <strong>Total Realized Daily Theta:</strong> <span style="color:#34d399;">$${summary.total_realized_theta.toFixed(2)}</span><br>
+                                    <strong>Avg per Position:</strong> <span style="color:#34d399;">$${summary.avg_theta_per_pos.toFixed(3)}</span>
+                                </div>
+                                <div>
+                                    <strong>Total Expected Daily Decay:</strong> <span style="color:#34d399;">$${summary.total_expected_decay.toFixed(2)}</span><br>
+                                    <strong>Projected Remaining Decay:</strong> <span style="color:#34d399;">~$${summary.projected_remaining.toLocaleString()}</span>
+                                </div>
+                            </div>
+                        `;
+                        summaryTile.innerHTML = summaryHTML;
+                    }
+
+                    function updateCSPTiles(csps) {
+                        const grid = document.getElementById('open-csp-grid');
+                        if (!grid) return;
+
+                        // Update each tile with fresh data (match by symbol + strike + exp)
+                        csps.forEach(csp => {
+                            const tiles = grid.querySelectorAll('.tile_csp');
+                            tiles.forEach(tile => {
+                                // Match tile by data attributes or content
+                                const tileSymbol = tile.querySelector('h3 span')?.textContent?.match(/\\(([^)]+)\\)/)?.[1];
+                                const tileScore = parseFloat(tile.dataset.score || 0);
+
+                                if (tileSymbol === csp.Symbol) {
+                                    // Update data attributes for sorting
+                                    tile.dataset.score = csp.grok_trade_score || 0;
+                                    tile.dataset.progress = Math.round(csp._progress_pct || 0);
+                                    tile.dataset.dte = csp._dte || 0;
+                                    tile.dataset.dailyTheta = csp._daily_theta_decay_dollars || 0;
+                                    tile.dataset.forwardTheta = csp._forward_theta_daily || 0;
+                                    tile.dataset.pl = csp._pl_dollars || 0;
+
+                                    // Update current mark display
+                                    const markEl = tile.querySelector('[data-field="current-mark"]');
+                                    if (markEl && csp._current_mark !== undefined) {
+                                        markEl.textContent = '$' + csp._current_mark.toFixed(2);
+                                    }
+
+                                    // Update P/L display
+                                    const plElements = tile.querySelectorAll('[data-field="pl"]');
+                                    plElements.forEach(plEl => {
+                                        const pl = csp._pl_dollars || 0;
+                                        plEl.textContent = (pl >= 0 ? '+' : '') + '$' + Math.abs(pl).toFixed(0);
+                                        plEl.style.color = pl >= 0 ? '#34d399' : '#fb923c';
+                                    });
+
+                                    // Update progress bar
+                                    const progressFill = tile.querySelector('.progress-fill');
+                                    const progressText = tile.querySelector('.progress-text');
+                                    if (progressFill && csp._progress_pct !== undefined) {
+                                        const progress = csp._progress_pct;
+                                        progressFill.style.width = Math.max(progress, 0) + '%';
+                                        if (progressText) progressText.textContent = progress.toFixed(1) + '%';
+
+                                        // Update progress bar color
+                                        let gradient;
+                                        if (progress >= 90) gradient = 'linear-gradient(90deg, #166534, #34d399)';
+                                        else if (progress >= 70) gradient = 'linear-gradient(90deg, #34d399, #6ee7b7)';
+                                        else if (progress >= 40) gradient = 'linear-gradient(90deg, #f59e0b, #fbbf24)';
+                                        else gradient = 'linear-gradient(90deg, #fb923c, #fca5a5)';
+                                        progressFill.style.background = gradient;
+                                    }
+
+                                    // Update bid/ask/mark
+                                    const bidAskEl = tile.querySelector('[data-field="bid-ask"]');
+                                    if (bidAskEl && csp._bid !== undefined && csp._ask !== undefined) {
+                                        bidAskEl.innerHTML = `$${csp._bid.toFixed(2)} / $${csp._ask.toFixed(2)}`;
+                                    }
+
+                                    // Update theta values
+                                    const dailyThetaEl = tile.querySelector('[data-field="daily-theta"]');
+                                    if (dailyThetaEl && csp._daily_theta_decay_dollars !== undefined) {
+                                        dailyThetaEl.textContent = '$' + csp._daily_theta_decay_dollars.toFixed(3);
+                                    }
+
+                                    const forwardThetaEl = tile.querySelector('[data-field="forward-theta"]');
+                                    if (forwardThetaEl && csp._forward_theta_daily !== undefined) {
+                                        forwardThetaEl.textContent = '$' + csp._forward_theta_daily.toFixed(2);
+                                    }
+                                }
+                            });
+                        });
+
+                        // Re-apply current sort after data update
+                        const sortSelect = document.getElementById('csp-sort');
+                        if (sortSelect && typeof sortCSPTiles === 'function') {
+                            sortCSPTiles();
+                        }
+                    }
+                    </script>
                 </div>
 
                 <!-- Analytics Tab (Combined) -->
@@ -3253,58 +3574,59 @@ def generate_html():
                         <button class="sub-tab" onclick="showAnalyticsSubTab('greeks')">
                             📉 Portfolio Greeks
                         </button>
-                        <button class="sub-tab" onclick="showAnalyticsSubTab('history')">
-                            📋 Trade History
-                        </button>
                     </div>
 
                     <!-- Performance Overview Sub-tab -->
                     <div id="analytics-performance" class="analytics-subtab">
                         <div style="background:linear-gradient(135deg, #1e293b, #0f172a); padding:28px; border-radius:20px; border:2px solid #334155; margin-bottom:24px;">
                             <h3 style="color:#e2e8f0; margin-bottom:20px;">📊 Trade Performance Summary</h3>
-                            <div id="performance-summary" style="color:#94a3b8;">Loading performance metrics...</div>
+                            {% if trade_history and trade_history|length > 0 %}
+                            {% set total_trades = trade_history|length %}
+                            {% set ns = namespace(wins=0, losses=0, total_pnl=0.0, total_win_pnl=0.0, total_loss_pnl=0.0, total_days_held=0) %}
+                            {% for trade in trade_history %}
+                                {% set pnl_raw = trade.get('Net Profit $', '0')|string|replace('$', '')|replace(',', '') %}
+                                {% set pnl = pnl_raw|safe_float %}
+                                {% set days = trade.get('Days Held', 0)|safe_float %}
+                                {% if pnl > 0 %}
+                                    {% set ns.wins = ns.wins + 1 %}
+                                    {% set ns.total_win_pnl = ns.total_win_pnl + pnl %}
+                                {% else %}
+                                    {% set ns.losses = ns.losses + 1 %}
+                                    {% set ns.total_loss_pnl = ns.total_loss_pnl + (pnl|abs) %}
+                                {% endif %}
+                                {% set ns.total_pnl = ns.total_pnl + pnl %}
+                                {% set ns.total_days_held = ns.total_days_held + days %}
+                            {% endfor %}
+                            {% set win_rate = ((ns.wins / total_trades) * 100)|round(1) if total_trades > 0 else 0 %}
+                            {% set avg_win = (ns.total_win_pnl / ns.wins)|round(2) if ns.wins > 0 else 0 %}
+                            {% set avg_loss = (ns.total_loss_pnl / ns.losses)|round(2) if ns.losses > 0 else 0 %}
+                            {% set avg_days_held = (ns.total_days_held / total_trades)|round(1) if total_trades > 0 else 0 %}
+                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:20px;">
+                                <div style="text-align:center; padding:20px; background:rgba(52,211,153,0.1); border-radius:12px; border:1px solid #34d399;">
+                                    <div style="font-size:2.5rem; color:#34d399; font-weight:bold;">{{ win_rate }}%</div>
+                                    <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Win Rate</div>
+                                    <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">{{ ns.wins }}W / {{ ns.losses }}L</div>
+                                </div>
+                                <div style="text-align:center; padding:20px; background:rgba(96,165,250,0.1); border-radius:12px; border:1px solid #60a5fa;">
+                                    <div style="font-size:2.5rem; {% if ns.total_pnl >= 0 %}color:#34d399{% else %}color:#fb923c{% endif %}; font-weight:bold;">${{ ns.total_pnl|round(2) }}</div>
+                                    <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Total P/L</div>
+                                    <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">{{ total_trades }} trades</div>
+                                </div>
+                                <div style="text-align:center; padding:20px; background:rgba(251,191,36,0.1); border-radius:12px; border:1px solid #fbbf24;">
+                                    <div style="font-size:2.5rem; color:#34d399; font-weight:bold;">${{ avg_win }}</div>
+                                    <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Avg Win</div>
+                                    <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">Avg Loss: ${{ avg_loss }}</div>
+                                </div>
+                                <div style="text-align:center; padding:20px; background:rgba(168,85,247,0.1); border-radius:12px; border:1px solid #a855f7;">
+                                    <div style="font-size:2.5rem; color:#a855f7; font-weight:bold;">{{ avg_days_held }}</div>
+                                    <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Avg Days Held</div>
+                                    <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">{{ total_trades }} closed trades</div>
+                                </div>
+                            </div>
+                            {% else %}
+                            <p style="color:#94a3b8; text-align:center; padding:20px;">No trade history available</p>
+                            {% endif %}
                         </div>
-
-                        <script>
-                        // Load performance data
-                        fetch('http://127.0.0.1:5000/api/trade_performance')
-                            .then(res => res.json())
-                            .then(data => {
-                                const perf = document.getElementById('performance-summary');
-                                if (data.error) {
-                                    perf.innerHTML = `<p style="color:#fb923c;">Error loading performance data</p>`;
-                                    return;
-                                }
-
-                                perf.innerHTML = `
-                                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:20px;">
-                                        <div style="text-align:center; padding:20px; background:rgba(52,211,153,0.1); border-radius:12px; border:1px solid #34d399;">
-                                            <div style="font-size:2.5rem; color:#34d399; font-weight:bold;">${data.win_rate || 0}%</div>
-                                            <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Win Rate</div>
-                                            <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">${data.wins || 0}W / ${data.losses || 0}L</div>
-                                        </div>
-                                        <div style="text-align:center; padding:20px; background:rgba(96,165,250,0.1); border-radius:12px; border:1px solid #60a5fa;">
-                                            <div style="font-size:2.5rem; color:#60a5fa; font-weight:bold;">$${(data.total_pnl || 0).toLocaleString()}</div>
-                                            <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Total P/L</div>
-                                            <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">${data.total_trades || 0} trades</div>
-                                        </div>
-                                        <div style="text-align:center; padding:20px; background:rgba(251,191,36,0.1); border-radius:12px; border:1px solid #fbbf24;">
-                                            <div style="font-size:2.5rem; color:#fbbf24; font-weight:bold;">$${(data.avg_win || 0).toLocaleString()}</div>
-                                            <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Avg Win</div>
-                                            <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">Avg Loss: $${Math.abs(data.avg_loss || 0).toLocaleString()}</div>
-                                        </div>
-                                        <div style="text-align:center; padding:20px; background:rgba(168,85,247,0.1); border-radius:12px; border:1px solid #a855f7;">
-                                            <div style="font-size:2.5rem; color:#a855f7; font-weight:bold;">${data.avg_dte || 0}</div>
-                                            <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Avg DTE</div>
-                                            <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">${data.avg_days_held || 0} days held</div>
-                                        </div>
-                                    </div>
-                                `;
-                            })
-                            .catch(err => {
-                                document.getElementById('performance-summary').innerHTML = `<p style="color:#fb923c;">Failed to load: ${err.message}</p>`;
-                            });
-                        </script>
 
                         <!-- Current Open Trades Table -->
                         <div style="background:linear-gradient(135deg, #1e293b, #0f172a); padding:28px; border-radius:20px; border:2px solid #334155; margin-bottom:24px;">
@@ -3349,82 +3671,71 @@ def generate_html():
                             {% endif %}
                         </div>
 
-                        <!-- Trade History Table -->
+                        <!-- Trade History Table (Server-side rendered) -->
                         <div style="background:linear-gradient(135deg, #1e293b, #0f172a); padding:28px; border-radius:20px; border:2px solid #334155; margin-bottom:24px;">
                             <h3 style="color:#e2e8f0; margin-bottom:20px;">📋 Trade History (Closed Trades)</h3>
-                            <div id="trade-history-table" style="color:#94a3b8;">Loading trade history...</div>
+                            {% if trade_history and trade_history|length > 0 %}
+                                <div style="overflow-x:auto; max-height:500px; overflow-y:auto;">
+                                    <table style="width:100%; border-collapse:collapse; color:#e2e8f0;">
+                                        <thead style="position:sticky; top:0; background:#1e293b; z-index:10;">
+                                            <tr style="border-bottom:2px solid #334155;">
+                                                <th style="padding:12px; text-align:left; color:#94a3b8; font-weight:600;">Symbol</th>
+                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Strike</th>
+                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Entry</th>
+                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Exit</th>
+                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Days</th>
+                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Entry $</th>
+                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Exit $</th>
+                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Net P/L</th>
+                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">ROI%</th>
+                                                <th style="padding:12px; text-align:center; color:#94a3b8; font-weight:600;">Result</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for trade in trade_history %}
+                                            {% set pnl_raw = trade.get('Net Profit $', '0')|string|replace('$', '')|replace(',', '') %}
+                                            {% set pnl = pnl_raw|safe_float %}
+                                            {% set roi_raw = trade.get('ROI %', '0')|string|replace('%', '') %}
+                                            {% set roi = roi_raw|safe_float %}
+                                            {% set strike_raw = trade.get('Strike', '0')|string|replace('$', '')|replace(',', '') %}
+                                            {% set entry_prem_raw = trade.get('Entry Premium', '0')|string|replace('$', '')|replace(',', '') %}
+                                            {% set exit_prem_raw = trade.get('Exit Premium', '0')|string|replace('$', '')|replace(',', '') %}
+                                            {% set win_loss = trade.get('Win/Loss', '') %}
+                                            <tr style="border-bottom:1px solid #334155;">
+                                                <td style="padding:12px; font-weight:600;">{{ trade.get('Symbol', 'N/A') }}</td>
+                                                <td style="padding:12px; text-align:right;">${{ strike_raw|safe_format("%.2f") }}</td>
+                                                <td style="padding:12px; text-align:right; font-size:0.85rem;">{{ trade.get('Entry Date', 'N/A') }}</td>
+                                                <td style="padding:12px; text-align:right; font-size:0.85rem;">{{ trade.get('Exit Date', 'N/A') }}</td>
+                                                <td style="padding:12px; text-align:right;">{{ trade.get('Days Held', 0) }}</td>
+                                                <td style="padding:12px; text-align:right; color:#34d399;">${{ entry_prem_raw|safe_format("%.2f") }}</td>
+                                                <td style="padding:12px; text-align:right; color:#60a5fa;">${{ exit_prem_raw|safe_format("%.2f") }}</td>
+                                                <td style="padding:12px; text-align:right; {% if pnl >= 0 %}color:#34d399{% else %}color:#fb923c{% endif %}; font-weight:600;">
+                                                    {% if pnl >= 0 %}+{% endif %}${{ pnl|safe_format("%.2f") }}
+                                                </td>
+                                                <td style="padding:12px; text-align:right; {% if roi >= 0 %}color:#34d399{% else %}color:#fb923c{% endif %}; font-weight:600;">
+                                                    {% if roi >= 0 %}+{% endif %}{{ roi|safe_format("%.2f") }}%
+                                                </td>
+                                                <td style="padding:12px; text-align:center;">
+                                                    {% if win_loss == 'WIN' %}
+                                                    <span style="background:#10b981; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:600;">WIN</span>
+                                                    {% elif win_loss == 'LOSS' %}
+                                                    <span style="background:#ef4444; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:600;">LOSS</span>
+                                                    {% else %}
+                                                    <span style="background:#6b7280; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem;">{{ win_loss or 'N/A' }}</span>
+                                                    {% endif %}
+                                                </td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div style="color:#94a3b8; font-size:0.85rem; margin-top:12px; text-align:right;">
+                                    Showing {{ trade_history|length }} closed trades
+                                </div>
+                            {% else %}
+                                <p style="color:#94a3b8; text-align:center; padding:20px;">No closed trades found in Trade_History sheet</p>
+                            {% endif %}
                         </div>
-
-                        <script>
-                        // Load trade history from Google Sheets
-                        fetch('http://127.0.0.1:5000/api/recent_trades?limit=50&status=closed')
-                            .then(res => res.json())
-                            .then(data => {
-                                const container = document.getElementById('trade-history-table');
-                                if (data.error || !data.trades || data.trades.length === 0) {
-                                    container.innerHTML = '<p style="text-align:center; padding:20px;">No closed trades found</p>';
-                                    return;
-                                }
-
-                                const trades = data.trades.filter(t => t.exit_date); // Only show truly closed trades
-
-                                if (trades.length === 0) {
-                                    container.innerHTML = '<p style="text-align:center; padding:20px;">No closed trades found</p>';
-                                    return;
-                                }
-
-                                let tableHTML = `
-                                    <div style="overflow-x:auto;">
-                                        <table style="width:100%; border-collapse:collapse; color:#e2e8f0;">
-                                            <thead>
-                                                <tr style="border-bottom:2px solid #334155;">
-                                                    <th style="padding:12px; text-align:left; color:#94a3b8; font-weight:600;">Symbol</th>
-                                                    <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Strike</th>
-                                                    <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Entry</th>
-                                                    <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Exit</th>
-                                                    <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Days</th>
-                                                    <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Entry $</th>
-                                                    <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Exit $</th>
-                                                    <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Net P/L</th>
-                                                    <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">ROC</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                `;
-
-                                trades.slice(0, 50).forEach(trade => {
-                                    const pnl = trade.pnl || 0;
-                                    const pnlColor = pnl >= 0 ? '#34d399' : '#fb923c';
-                                    const roc = trade.roc || 0;
-                                    const rocColor = roc >= 0 ? '#34d399' : '#fb923c';
-
-                                    tableHTML += `
-                                        <tr style="border-bottom:1px solid #334155;">
-                                            <td style="padding:12px; font-weight:600;">${trade.symbol || 'N/A'}</td>
-                                            <td style="padding:12px; text-align:right;">$${(trade.strike || 0).toFixed(2)}</td>
-                                            <td style="padding:12px; text-align:right; font-size:0.85rem;">${trade.entry_date || 'N/A'}</td>
-                                            <td style="padding:12px; text-align:right; font-size:0.85rem;">${trade.exit_date || 'N/A'}</td>
-                                            <td style="padding:12px; text-align:right;">${trade.days_held || 0}</td>
-                                            <td style="padding:12px; text-align:right; color:#34d399;">$${(trade.entry_premium || 0).toFixed(2)}</td>
-                                            <td style="padding:12px; text-align:right; color:#60a5fa;">$${(trade.exit_premium || 0).toFixed(2)}</td>
-                                            <td style="padding:12px; text-align:right; color:${pnlColor}; font-weight:600;">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</td>
-                                            <td style="padding:12px; text-align:right; color:${rocColor}; font-weight:600;">${roc >= 0 ? '+' : ''}${roc.toFixed(1)}%</td>
-                                        </tr>
-                                    `;
-                                });
-
-                                tableHTML += `
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                `;
-
-                                container.innerHTML = tableHTML;
-                            })
-                            .catch(err => {
-                                document.getElementById('trade-history-table').innerHTML = `<p style="color:#fb923c; text-align:center;">Failed to load: ${err.message}</p>`;
-                            });
-                        </script>
                     </div>
 
                     <!-- Portfolio Greeks Sub-tab -->
@@ -3604,50 +3915,6 @@ def generate_html():
                         {% else %}
                             <div class="empty">No open positions to analyze.</div>
                         {% endif %}
-                    </div>
-
-                    <!-- Trade History Sub-tab -->
-                    <div id="analytics-history" class="analytics-subtab" style="display:none;">
-                        <div id="analytics-history-content" style="color:#94a3b8;">Loading trade history...</div>
-                        <script>
-                        fetch('/api/recent_trades')
-                            .then(res => res.json())
-                            .then(data => {
-                                const histDiv = document.getElementById('analytics-history-content');
-                                if (!data.trades || data.trades.length === 0) {
-                                    histDiv.innerHTML = '<p style="text-align:center; color:#94a3b8;">No trade history available</p>';
-                                    return;
-                                }
-
-                                let html = '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;">';
-                                html += '<thead><tr style="border-bottom:2px solid #334155;">';
-                                html += '<th style="padding:12px; text-align:left; color:#94a3b8;">Symbol</th>';
-                                html += '<th style="padding:12px; text-align:right; color:#94a3b8;">Strike</th>';
-                                html += '<th style="padding:12px; text-align:right; color:#94a3b8;">Entry</th>';
-                                html += '<th style="padding:12px; text-align:right; color:#94a3b8;">Exit</th>';
-                                html += '<th style="padding:12px; text-align:right; color:#94a3b8;">P/L</th>';
-                                html += '<th style="padding:12px; text-align:right; color:#94a3b8;">Days</th>';
-                                html += '</tr></thead><tbody>';
-
-                                data.trades.forEach(t => {
-                                    const plColor = t.profit_loss > 0 ? '#34d399' : t.profit_loss < 0 ? '#fb923c' : '#94a3b8';
-                                    html += `<tr style="border-bottom:1px solid #1e293b;">`;
-                                    html += `<td style="padding:12px; color:#e2e8f0;">${t.symbol}</td>`;
-                                    html += `<td style="padding:12px; text-align:right; color:#cbd5e1;">$${t.strike}</td>`;
-                                    html += `<td style="padding:12px; text-align:right; color:#cbd5e1;">${t.entry_date}</td>`;
-                                    html += `<td style="padding:12px; text-align:right; color:#cbd5e1;">${t.exit_date || 'Open'}</td>`;
-                                    html += `<td style="padding:12px; text-align:right; color:${plColor}; font-weight:bold;">$${t.profit_loss?.toFixed(2) || '0.00'}</td>`;
-                                    html += `<td style="padding:12px; text-align:right; color:#cbd5e1;">${t.days_held || 0}</td>`;
-                                    html += `</tr>`;
-                                });
-
-                                html += '</tbody></table></div>';
-                                histDiv.innerHTML = html;
-                            })
-                            .catch(err => {
-                                document.getElementById('analytics-history-content').innerHTML = `<p style="color:#fb923c;">Failed to load: ${err.message}</p>`;
-                            });
-                        </script>
                     </div>
 
                     <script>
@@ -3919,8 +4186,8 @@ def generate_html():
                                     </thead>
                                     <tbody id="risk-table-body">
                                         {% for trade in open_trades %}
-                                        {% set strike = trade.get('Strike', 0)|float %}
-                                        {% set underlying = trade.get('Underlying Price', 0)|float %}
+                                        {% set strike = trade.get('Strike', 0)|safe_float %}
+                                        {% set underlying = trade.get('_underlying_price', trade.get('Underlying Price', 0))|safe_float %}
                                         {% set contracts = trade.get('Contracts Qty', 1)|int %}
                                         {% set max_loss = strike * contracts * 100 %}
                                         {% set distance_pct = ((underlying - strike) / underlying * 100) if underlying > 0 else 0 %}
@@ -3976,7 +4243,12 @@ def generate_html():
                                 const risks = [];
 
                                 trades.forEach(trade => {
-                                    const strike = parseFloat(trade.Strike || 0);
+                                    // Handle Strike as string (may have $ sign) or number
+                                    let strikeVal = trade.Strike || trade._strike || 0;
+                                    if (typeof strikeVal === 'string') {
+                                        strikeVal = strikeVal.replace(/[$,]/g, '');
+                                    }
+                                    const strike = parseFloat(strikeVal) || 0;
                                     const contracts = parseInt(trade['Contracts Qty'] || 1);
                                     const maxLoss = strike * contracts * 100;
 
@@ -5195,6 +5467,7 @@ def generate_html():
         trade_history=trade_history,
         allocation_data=allocation_data,
         current_wheel_capital=total_wheel_capital,
+        WHEEL_CAPITAL=total_wheel_capital,  # For Risk Dashboard JS
         leaps_opps=leaps_opps,
         get_company_name=get_company_name,
         captured_leaps=captured_leaps,
