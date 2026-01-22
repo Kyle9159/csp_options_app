@@ -40,7 +40,7 @@ from covered_call_bot import get_current_positions, find_covered_calls
 from dividend_tracker_bot import generate_dividend_report
 from simple_options_scanner import main as run_simple_scanner
 from zero_dte_spread_scanner import scan_0dte_spreads
-from helper_functions import calculate_trade_score, save_cached_scanner, load_cached_scanner, safe_float, safe_int, save_cached_leaps, load_cached_leaps
+from helper_functions import calculate_trade_score, save_cached_scanner, load_cached_scanner, safe_float, safe_int, save_cached_leaps, load_cached_leaps, load_sr_cache
 from schwab_utils import get_client
 
 # Enhanced analytics imports
@@ -791,6 +791,26 @@ async def run_all_bots():
                 symbol = tile.get('symbol')
                 if symbol in bb_cache:
                     tile['bollinger_bands'] = bb_cache[symbol]
+
+        # Enrich opportunities with S/R levels from dedicated cache (32-day TTL)
+        # This ensures S/R levels persist even when scanner cache is regenerated
+        print("Enriching scanner opportunities with S/R levels...")
+        sr_cache = load_sr_cache()
+        sr_enriched_count = 0
+        for tile in simple_scanner_opps:
+            if isinstance(tile, dict) and 'suggestions' in tile:
+                symbol = tile.get('symbol', '').upper()
+                for opp in tile['suggestions']:
+                    # Only add S/R if missing or empty
+                    if not opp.get('support_resistance'):
+                        if symbol in sr_cache:
+                            sr_entry = sr_cache[symbol]
+                            sr_levels = sr_entry.get('levels', {})
+                            if sr_levels:
+                                opp['support_resistance'] = sr_levels
+                                sr_enriched_count += 1
+        if sr_enriched_count > 0:
+            print(f"Enriched {sr_enriched_count} opportunities with cached S/R levels")
 
         pbar.update(1)
 

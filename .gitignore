@@ -39,9 +39,12 @@ NUL
 
 # Credentials & Secrets
 .env
+.env.*
 google-credentials.json
+service_account.json
 *credentials*.json
 *.token
+token.json
 
 # Logs
 logs/

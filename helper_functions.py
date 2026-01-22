@@ -51,58 +51,116 @@ def safe_date_update(row, date_value):
 
 # Cache management functions
 import json
+import time
 from pathlib import Path
 
+# Cache TTL constants (in hours)
+SCANNER_CACHE_HOURS = 2   # Scanner cache expires after 2 hours
+LEAPS_CACHE_HOURS = 24    # LEAPS cache expires after 24 hours
+
 def save_cached_scanner(data):
-    """Save scanner opportunities to cache"""
+    """Save scanner opportunities to cache with timestamp"""
     try:
         cache_file = Path("cache_files") / "simple_scanner_cache.json"
+        cache_data = {
+            'timestamp': time.time(),
+            'data': data
+        }
         with open(cache_file, 'w') as f:
-            json.dump(data, f, indent=2, default=str)
+            json.dump(cache_data, f, indent=2, default=str)
     except Exception as e:
         print(f"Failed to save scanner cache: {e}")
 
-def load_cached_scanner():
-    """Load scanner opportunities from cache"""
+def load_cached_scanner(max_age_hours=None):
+    """Load scanner opportunities from cache if not expired
+
+    Args:
+        max_age_hours: Maximum cache age in hours. Defaults to SCANNER_CACHE_HOURS (2 hours)
+
+    Returns:
+        Cached data if valid and not expired, None otherwise
+    """
     try:
         cache_file = Path("cache_files") / "simple_scanner_cache.json"
         if cache_file.exists():
             with open(cache_file, 'r') as f:
-                data = json.load(f)
+                cache_data = json.load(f)
 
-                # Fix: Parse support_resistance if it's a string
-                if data:
-                    for tile in data:
-                        if 'suggestions' in tile:
-                            for opp in tile['suggestions']:
-                                if 'support_resistance' in opp and isinstance(opp['support_resistance'], str):
-                                    try:
-                                        # Parse the string representation back to dict
-                                        opp['support_resistance'] = eval(opp['support_resistance'])
-                                    except:
-                                        opp['support_resistance'] = {}
+            # Check for new format with timestamp
+            if isinstance(cache_data, dict) and 'timestamp' in cache_data:
+                cache_age_hours = (time.time() - cache_data['timestamp']) / 3600
+                ttl = max_age_hours if max_age_hours is not None else SCANNER_CACHE_HOURS
 
-                return data
+                if cache_age_hours > ttl:
+                    print(f"Scanner cache expired ({cache_age_hours:.1f}h old, TTL={ttl}h)")
+                    return None
+
+                data = cache_data['data']
+            else:
+                # Legacy format without timestamp - treat as expired
+                print("Scanner cache in legacy format (no timestamp), treating as expired")
+                return None
+
+            # Fix: Parse support_resistance if it's a string
+            if data:
+                for tile in data:
+                    if 'suggestions' in tile:
+                        for opp in tile['suggestions']:
+                            if 'support_resistance' in opp and isinstance(opp['support_resistance'], str):
+                                try:
+                                    # Parse the string representation back to dict
+                                    opp['support_resistance'] = eval(opp['support_resistance'])
+                                except:
+                                    opp['support_resistance'] = {}
+
+            return data
     except Exception as e:
         print(f"Failed to load scanner cache: {e}")
     return None  # Return None to trigger fresh scan
 
 def save_cached_leaps(data, LEAPS_CACHE_FILE=None):
-    """Save LEAPS opportunities to cache"""
+    """Save LEAPS opportunities to cache with timestamp"""
     try:
         cache_file = Path("cache_files") / (LEAPS_CACHE_FILE or "leaps_cache.json")
+        cache_data = {
+            'timestamp': time.time(),
+            'data': data
+        }
         with open(cache_file, 'w') as f:
-            json.dump(data, f, indent=2, default=str)
+            json.dump(cache_data, f, indent=2, default=str)
     except Exception as e:
         print(f"Failed to save leaps cache: {e}")
 
-def load_cached_leaps(LEAPS_CACHE_FILE=None):
-    """Load LEAPS opportunities from cache"""
+def load_cached_leaps(LEAPS_CACHE_FILE=None, max_age_hours=None):
+    """Load LEAPS opportunities from cache if not expired
+
+    Args:
+        LEAPS_CACHE_FILE: Custom cache filename
+        max_age_hours: Maximum cache age in hours. Defaults to LEAPS_CACHE_HOURS (24 hours)
+
+    Returns:
+        Cached data if valid and not expired, None otherwise
+    """
     try:
         cache_file = Path("cache_files") / (LEAPS_CACHE_FILE or "leaps_cache.json")
         if cache_file.exists():
             with open(cache_file, 'r') as f:
-                return json.load(f)
+                cache_data = json.load(f)
+
+            # Check for new format with timestamp
+            if isinstance(cache_data, dict) and 'timestamp' in cache_data:
+                cache_age_hours = (time.time() - cache_data['timestamp']) / 3600
+                ttl = max_age_hours if max_age_hours is not None else LEAPS_CACHE_HOURS
+
+                if cache_age_hours > ttl:
+                    print(f"LEAPS cache expired ({cache_age_hours:.1f}h old, TTL={ttl}h)")
+                    return None
+
+                return cache_data['data']
+            else:
+                # Legacy format without timestamp - treat as expired
+                print("LEAPS cache in legacy format (no timestamp), treating as expired")
+                return None
     except Exception as e:
         print(f"Failed to load leaps cache: {e}")
     return None  # Return None to trigger fresh scan
