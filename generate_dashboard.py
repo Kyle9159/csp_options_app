@@ -2369,9 +2369,59 @@ def generate_html():
                                             </span>
                                         </div>
 
+                                        <!-- Rebound Signals -->
+                                        {% set rebound_signals = tile.suggestions[0].get('rebound_signals', {}) if tile.suggestions and tile.suggestions|length > 0 else {} %}
+                                        {% if rebound_signals and rebound_signals.get('total_score') %}
+                                            {% set score = rebound_signals.get('total_score', 0) %}
+                                            {% set max_score = rebound_signals.get('max_score', 15) %}
+                                            {% set score_pct = (score / max_score * 100)|int %}
+
+                                            {% if score >= 10 %}
+                                                {% set color = '#34d399' %}
+                                                {% set bg = 'rgba(16, 185, 129, 0.2)' %}
+                                                {% set icon = '🔥' %}
+                                            {% elif score >= 7 %}
+                                                {% set color = '#fbbf24' %}
+                                                {% set bg = 'rgba(251, 191, 36, 0.2)' %}
+                                                {% set icon = '⚡' %}
+                                            {% else %}
+                                                {% set color = '#94a3b8' %}
+                                                {% set bg = 'rgba(148, 163, 184, 0.1)' %}
+                                                {% set icon = '📊' %}
+                                            {% endif %}
+
+                                            <div style="margin: 12px 0; padding: 12px; background: {{ bg }}; border-radius: 10px; border-left: 4px solid {{ color }};">
+                                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                                    <strong style="color: {{ color }}; font-size: 1.05rem;">{{ icon }} Rebound Signals</strong>
+                                                    <span style="color: {{ color }}; font-weight: bold; font-size: 1.1rem;">{{ score }}/{{ max_score }}</span>
+                                                </div>
+
+                                                <div style="font-size: 0.9rem; color: #cbd5e1; line-height: 1.6;">
+                                                    {% if rebound_signals.get('drawdown_pct') %}
+                                                        <div>📉 Drawdown: <strong>{{ rebound_signals.drawdown_pct }}%</strong> from 20d high</div>
+                                                    {% endif %}
+                                                    {% if rebound_signals.get('consecutive_red_days') %}
+                                                        <div>🔻 Consecutive red days: <strong>{{ rebound_signals.consecutive_red_days }}</strong></div>
+                                                    {% endif %}
+                                                    {% if rebound_signals.get('bb_position_pct') %}
+                                                        <div>📊 BB Position: <strong>{{ rebound_signals.bb_position_pct }}%</strong> (lower=oversold)</div>
+                                                    {% endif %}
+                                                    {% if rebound_signals.get('volume_ratio') %}
+                                                        <div>📈 Volume: <strong>{{ rebound_signals.volume_ratio }}x</strong> avg</div>
+                                                    {% endif %}
+                                                </div>
+
+                                                {% if rebound_signals.get('verdict') %}
+                                                    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); font-style: italic; color: {{ color }}; font-size: 0.9rem;">
+                                                        {{ rebound_signals.verdict }}
+                                                    </div>
+                                                {% endif %}
+                                            </div>
+                                        {% endif %}
+
                                         <!-- Support/Resistance: Once per symbol -->
                                         {% set sr = tile.suggestions[0].get('support_resistance', {}) if tile.suggestions and tile.suggestions|length > 0 else {} %}
-                                        {% if sr and (sr is mapping) and sr.keys()|length > 0 %}
+                                        {% if sr and (sr.get('1') or sr.get('3') or sr.get('6') or sr.get('12')) %}
                                             <div class="support-resistance" style="margin: 12px 0; padding: 12px; background: rgba(16, 78, 59, 0.6); border-radius: 10px; font-size: 0.95rem;">
                                                 <strong>📊 Support / Resistance Levels</strong>
 
@@ -2421,6 +2471,53 @@ def generate_html():
                                             <em style="color:#94a3b8; margin: 12px 0; display: block;">
                                                 Support/Resistance levels unavailable
                                             </em>
+                                        {% endif %}
+
+                                        <!-- Quality Signals -->
+                                        {% set quality = tile.suggestions[0].get('quality_signals', {}) if tile.suggestions and tile.suggestions|length > 0 else {} %}
+                                        {% if quality and quality.keys()|length > 1 %}
+                                            {% set warnings = quality.get('warnings', []) %}
+                                            {% set has_warnings = warnings|length > 0 %}
+
+                                            <div style="margin: 12px 0; padding: 12px; background: {% if has_warnings %}rgba(239, 68, 68, 0.2){% else %}rgba(16, 185, 129, 0.2){% endif %}; border-radius: 10px; border-left: 4px solid {% if has_warnings %}#ef4444{% else %}#10b981{% endif %};">
+                                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                                    <strong style="color: {% if has_warnings %}#ef4444{% else %}#10b981{% endif %}; font-size: 1.05rem;">
+                                                        {% if has_warnings %}⚠️ Quality Warnings{% else %}✅ Quality Checks{% endif %}
+                                                    </strong>
+                                                </div>
+
+                                                <div style="font-size: 0.9rem; color: #cbd5e1; line-height: 1.6;">
+                                                    {% if warnings|length > 0 %}
+                                                        {% for warning in warnings %}
+                                                            <div style="color: #fbbf24; margin: 4px 0;">⚠️ {{ warning }}</div>
+                                                        {% endfor %}
+                                                    {% endif %}
+
+                                                    {% if quality.get('days_to_earnings') %}
+                                                        <div>📅 Earnings: {{ quality.days_to_earnings }} days away</div>
+                                                    {% endif %}
+
+                                                    {% if quality.get('iv_premium_pct') is not none %}
+                                                        <div>💎 IV Premium: {{ quality.iv_premium_pct }}% (IV: {{ quality.iv }}% vs HV: {{ quality.hv_20 }}%)</div>
+                                                    {% endif %}
+
+                                                    {% if quality.get('distance_from_52w_low_pct') %}
+                                                        <div>📍 52w Low Distance: {{ quality.distance_from_52w_low_pct }}% above</div>
+                                                    {% endif %}
+
+                                                    {% if quality.get('macd_status') %}
+                                                        <div>📉 MACD: {{ quality.macd_status }}</div>
+                                                    {% endif %}
+
+                                                    {% if quality.get('relative_strength') is not none %}
+                                                        <div>📊 vs SPY: {{ quality.relative_strength }}% (Stock: {{ quality.stock_5d_return }}%, SPY: {{ quality.spy_5d_return }}%)</div>
+                                                    {% endif %}
+
+                                                    {% if quality.get('ma_signal') %}
+                                                        <div>📈 20d MA: {{ quality.ma_signal }} ({{ quality.ma_20_slope }}%)</div>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
                                         {% endif %}
 
                                         <!-- Individual Opportunities -->
@@ -2520,9 +2617,33 @@ def generate_html():
                                                                     {{ opp.rsi|safe_format("%.1f") }}
                                                                 </div>
                                                                 <div style="color:#a7f3d0;">
-                                                                    <strong>💹 IV Rank:</strong><br>
+                                                                    <strong>💹 IV:</strong><br>
                                                                     {{ opp.iv|safe_format("%.0f") }}%
                                                                 </div>
+                                                                {% if opp.get('open_interest') %}
+                                                                <div style="color:#a7f3d0;">
+                                                                    <strong>💧 Open Interest:</strong><br>
+                                                                    {{ opp.open_interest|safe_format("%d") }}
+                                                                </div>
+                                                                {% endif %}
+                                                                {% if opp.get('volume') is not none %}
+                                                                <div style="color:#a7f3d0;">
+                                                                    <strong>📊 Volume:</strong><br>
+                                                                    {{ opp.volume|safe_format("%d") }}
+                                                                </div>
+                                                                {% endif %}
+                                                                {% if opp.get('bid_ask_spread_pct') %}
+                                                                <div style="color:#a7f3d0;">
+                                                                    <strong>💱 Bid-Ask Spread:</strong><br>
+                                                                    {{ opp.bid_ask_spread_pct|safe_format("%.1f") }}%
+                                                                </div>
+                                                                {% endif %}
+                                                                {% if opp.get('bid') and opp.get('ask') %}
+                                                                <div style="color:#a7f3d0;">
+                                                                    <strong>📋 Bid/Ask:</strong><br>
+                                                                    ${{ opp.bid|safe_format("%.2f") }} / ${{ opp.ask|safe_format("%.2f") }}
+                                                                </div>
+                                                                {% endif %}
                                                             </div>
 
                                                             <!-- Support/Resistance Levels -->

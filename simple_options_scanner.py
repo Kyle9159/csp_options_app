@@ -37,7 +37,7 @@ import trendln
 from datetime import datetime, timedelta
 import pytz
 from ta.momentum import RSIIndicator
-from ta.trend import SMAIndicator
+from ta.trend import SMAIndicator, MACD as MACDIndicator
 from telegram import Bot as telegram_bot
 from grok_utils import get_grok_opportunity_analysis, get_grok_sentiment_cached, get_grok_analysis, parse_grok_batch_response
 from helper_functions import save_cached_scanner, load_sr_cache, save_sr_cache
@@ -71,23 +71,70 @@ caputured_opportunities = []
 
 # ==================== SYMBOL TIERS ====================
 TIER_1_SYMBOLS = [
-    'KO', 'JNJ', 'PG', 'WMT', 'VZ', 'MRK', 'BMY', 'ABBV', 'PEP',
-    'XOM', 'CVX', 'O', 'HD', 'LOW', 'TGT', 'COST', 
-    'NKE', 'DIS', 'CAT', 'DE', 'UNH', 'SPY', 'QQQ', 'IWM', 'DIA',
-    'AAPL', 'MSFT', 'NVDA', 'AMD', 'META', 'AMZN', 'GOOGL', 'NFLX',
-    'MMM', 'T', 'BLK', 'C', 'CSCO', 'GE', 'IBM', 'JCI', 'LMT', 'LEU', 'CCJ',
-    'MCD', 'RTX', 'USB', 'WFC', 'PNC', 'TFC', 'CEG', 'BWXT', 'NLR', 'VOO', 'SCHD'
+    # Dividend Aristocrats & Blue Chips
+    'KO', 'JNJ', 'PG', 'WMT', 'VZ', 'MRK', 'BMY', 'ABBV', 'PEP', 'CL', 'KMB',
+    # Energy
+    'XOM', 'CVX', 'COP', 'PSX', 'MPC', 'VLO',
+    # REITs & Stable Income
+    'O', 'STAG', 'SPG',
+    # Retail & Consumer
+    'HD', 'LOW', 'TGT', 'COST', 'WMT', 'TJX',
+    # Brands & Consumer Discretionary
+    'NKE', 'DIS', 'SBUX', 'MCD',
+    # Industrials
+    'CAT', 'DE', 'HON', 'MMM', 'BA', 'RTX', 'LMT', 'GD', 'NOC',
+    # Healthcare & Insurance
+    'UNH', 'CVS', 'CI', 'HUM', 'ABBV', 'AMGN', 'GILD',
+    # Major ETFs
+    'SPY', 'QQQ', 'IWM', 'DIA', 'VOO', 'VTI', 'SCHD', 'JEPI', 'JEPQ',
+    # Mega Cap Tech
+    'AAPL', 'MSFT', 'NVDA', 'AMD', 'META', 'AMZN', 'GOOGL', 'GOOG', 'NFLX', 'AVGO',
+    # Financials
+    'JPM', 'BAC', 'WFC', 'USB', 'PNC', 'TFC', 'BLK', 'GS', 'MS', 'SCHW', 'AXP', 'V', 'MA',
+    # Telecom & Utilities
+    'T', 'TMUS', 'NEE', 'DUK', 'SO', 'D',
+    # Tech Infrastructure
+    'CSCO', 'IBM', 'ORCL', 'CRM', 'NOW',
+    # Industrial & Manufacturing
+    'GE', 'JCI', 'EMR', 'ITW',
+    # Nuclear Energy
+    'LEU', 'CCJ', 'CEG', 'BWXT', 'NLR', 'VST',
+    # Semiconductors
+    'TSM', 'ASML', 'QCOM', 'TXN', 'AMAT', 'LRCX', 'KLAC', 'MU'
 ]
 
 TIER_2_SYMBOLS = [
-    'ADBE', 'CRM', 'ORCL', 'QCOM', 'LRCX', 'MU', 'ASML', 'KLAC', 'MRVL',
-    'SNPS', 'CDNS', 'PANW', 'SHOP', 'AVGO', 'TSM', 'JPM', 'BAC', 'GS', 
-    'MS', 'V', 'MA', 'AXP', 'PYPL', 'PFE', 'LLY', 'NET', 'DDOG', 'MDB', 
-    'ZM', 'CMG', 'SBUX', 'UPS', 'FDX', 'MCK', 'INTC', 'TXN', 'BABA', 
-    'CRWD', 'PLTR', 'ROKU', 'SNAP', 'ZS', 'DASH', 'XLE', 'OXY', 
-    'HAL', 'SLB', 'FCX', 'CLF', 'APA', 'BP', 'CFG', 'FITB', 
-    'KEY', 'RF', 'ZION', 'TQQQ', 'SOXL', 'TDAQ', 'NBIS', 
-    'HIMS', 'OKLO', 'SMR', 'URA', 'GTLB', 'BMNR'
+    # Enterprise Software & Cloud
+    'ADBE', 'SHOP', 'SNOW', 'DDOG', 'MDB', 'NET', 'ZS', 'CRWD', 'PANW', 'FTNT',
+    'S', 'TEAM', 'WDAY', 'ZI', 'GTLB',
+    # Semiconductors & Hardware
+    'MRVL', 'SNPS', 'CDNS', 'INTC', 'ON', 'ADI', 'NXPI', 'MCHP',
+    # Pharma & Biotech
+    'PFE', 'LLY', 'NVO', 'AZN', 'REGN', 'VRTX', 'BIIB', 'MRNA', 'BNTX',
+    # Communication & Collaboration
+    'ZM', 'TWLO', 'DOCN', 'U', 'ASAN',
+    # Consumer & Restaurant
+    'CMG', 'YUM', 'QSR', 'DPZ', 'WING', 'CAVA',
+    # Logistics & Transportation
+    'UPS', 'FDX', 'ODFL', 'XPO', 'JBHT',
+    # Healthcare Services & Distribution
+    'MCK', 'CAH', 'ABC', 'TDOC', 'VEEV',
+    # International Tech
+    'BABA', 'PDD', 'JD', 'SE',
+    # Fintech & Crypto
+    'PYPL', 'SQ', 'COIN', 'HOOD', 'SOFI', 'AFRM',
+    # Entertainment & Gaming
+    'RBLX', 'DKNG', 'PINS',
+    # Growth Tech
+    'PLTR', 'ROKU', 'DASH', 'ABNB', 'UBER', 'LYFT',
+    # Energy & Resources
+    'XLE', 'OXY', 'HAL', 'SLB', 'FCX', 'CLF', 'APA', 'BP', 'EOG', 'DVN', 'FANG',
+    # Regional Banks
+    'CFG', 'FITB', 'KEY', 'RF', 'ZION', 'HBAN', 'MTB',
+    # Leveraged ETFs (Higher Risk)
+    'TQQQ', 'SOXL', 'TDAQ',
+    # Emerging Growth
+    'NBIS', 'HIMS', 'OKLO', 'SMR', 'URA', 'BMNR', 'IONQ', 'RDDT', 'ARM'
 ]
 
 TIER_3_SYMBOLS = [
@@ -209,22 +256,311 @@ def get_symbol_tier(symbol):
     else: return 3
 
 def is_red_day(symbol):
+    """Legacy function - kept for backwards compatibility. Use check_rebound_signals() for better filtering."""
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period="70d", interval="1d")
         if len(df) < 14:
             return True, 50.0, df['Close'].iloc[-1] if not df.empty else 0
-        
+
         rsi_indicator = RSIIndicator(close=df['Close'], window=14)
         rsi = rsi_indicator.rsi().iloc[-1]
         current_price = df['Close'].iloc[-1]
-        
-        is_safe = rsi < 70  # Loosened from stricter
+
+        is_safe = rsi < 45  # Stricter for better wheel strategy outcomes
         return is_safe, float(rsi), float(current_price)
     except Exception as e:
         print(f"   RSI error {symbol}: {e}")
         return True, 50.0, 0
-    
+
+def check_rebound_signals(symbol, hist_df=None):
+    """
+    Comprehensive rebound detection for wheel strategy.
+    Returns: (is_good_candidate, signals_dict)
+
+    Tier 1 Signals:
+    - Recent drawdown % (5-15% from 20-day high)
+    - Bollinger Band position (near lower band)
+    - Volume spike on down days (>1.5x average)
+    - Consecutive red days (3-5 days)
+    - RSI (30-45 range)
+    """
+    try:
+        # Fetch or use provided data
+        if hist_df is None:
+            ticker = yf.Ticker(symbol)
+            hist_df = ticker.history(period="70d", interval="1d")
+
+        if hist_df.empty or len(hist_df) < 30:
+            return False, {"error": "Insufficient data"}
+
+        signals = {}
+        score = 0
+
+        # 1. RSI Check (30-45 = oversold but not extreme)
+        if len(hist_df) >= 14:
+            rsi_indicator = RSIIndicator(close=hist_df['Close'], window=14)
+            rsi = rsi_indicator.rsi().iloc[-1]
+            signals['rsi'] = float(rsi)
+            if 30 <= rsi <= 45:
+                score += 3
+                signals['rsi_signal'] = "Strong oversold"
+            elif rsi < 50:
+                score += 1
+                signals['rsi_signal'] = "Mild oversold"
+            else:
+                signals['rsi_signal'] = "Not oversold"
+
+        # 2. Recent Drawdown (8-15% from 20-day high is ideal)
+        if len(hist_df) >= 20:
+            high_20d = hist_df['Close'][-20:].max()
+            current_price = hist_df['Close'].iloc[-1]
+            drawdown_pct = ((current_price - high_20d) / high_20d) * 100
+            signals['drawdown_pct'] = round(drawdown_pct, 2)
+            signals['high_20d'] = round(high_20d, 2)
+
+            if -15 <= drawdown_pct <= -8:
+                score += 3
+                signals['drawdown_signal'] = "Ideal pullback"
+            elif -20 <= drawdown_pct <= -5:
+                score += 2
+                signals['drawdown_signal'] = "Good pullback"
+            elif drawdown_pct < -20:
+                signals['drawdown_signal'] = "Too steep (falling knife?)"
+            else:
+                signals['drawdown_signal'] = "No significant pullback"
+
+        # 3. Bollinger Bands (near lower band = oversold)
+        if len(hist_df) >= 20:
+            sma_20 = hist_df['Close'].rolling(window=20).mean().iloc[-1]
+            std_20 = hist_df['Close'].rolling(window=20).std().iloc[-1]
+            bb_lower = sma_20 - (2 * std_20)
+            bb_upper = sma_20 + (2 * std_20)
+            current_price = hist_df['Close'].iloc[-1]
+
+            bb_position = ((current_price - bb_lower) / (bb_upper - bb_lower)) * 100
+            signals['bb_position_pct'] = round(bb_position, 1)
+
+            if bb_position <= 20:
+                score += 3
+                signals['bb_signal'] = "At/below lower band"
+            elif bb_position <= 35:
+                score += 2
+                signals['bb_signal'] = "Near lower band"
+            else:
+                signals['bb_signal'] = "Not near lower band"
+
+        # 4. Consecutive Red Days (3-5 is ideal)
+        consecutive_red = 0
+        for i in range(len(hist_df)-1, max(len(hist_df)-10, 0), -1):
+            if hist_df['Close'].iloc[i] < hist_df['Close'].iloc[i-1]:
+                consecutive_red += 1
+            else:
+                break
+        signals['consecutive_red_days'] = consecutive_red
+
+        if 3 <= consecutive_red <= 5:
+            score += 3
+            signals['red_days_signal'] = "Ideal selling exhaustion"
+        elif consecutive_red >= 2:
+            score += 1
+            signals['red_days_signal'] = "Some weakness"
+        elif consecutive_red >= 6:
+            signals['red_days_signal'] = "Extended weakness (caution)"
+        else:
+            signals['red_days_signal'] = "No selling pressure"
+
+        # 5. Volume Analysis (spike on down days = capitulation)
+        if len(hist_df) >= 20:
+            avg_volume_20 = hist_df['Volume'][-20:].mean()
+            recent_volume = hist_df['Volume'].iloc[-1]
+            volume_ratio = recent_volume / avg_volume_20 if avg_volume_20 > 0 else 0
+            signals['volume_ratio'] = round(volume_ratio, 2)
+
+            # Check if last day was down
+            last_day_down = hist_df['Close'].iloc[-1] < hist_df['Close'].iloc[-2]
+
+            if last_day_down and volume_ratio >= 1.5:
+                score += 3
+                signals['volume_signal'] = "High volume capitulation"
+            elif volume_ratio >= 1.3:
+                score += 1
+                signals['volume_signal'] = "Above avg volume"
+            else:
+                signals['volume_signal'] = "Normal volume"
+
+        # Final scoring (max 15 points)
+        signals['total_score'] = score
+        signals['max_score'] = 15
+
+        # Require at least 7/15 points to be a good candidate
+        is_good = score >= 7
+
+        if is_good:
+            signals['verdict'] = f"Strong rebound candidate ({score}/15)"
+        elif score >= 5:
+            signals['verdict'] = f"Moderate candidate ({score}/15)"
+        else:
+            signals['verdict'] = f"Weak candidate ({score}/15)"
+
+        return is_good, signals
+
+    except Exception as e:
+        print(f"   Rebound check error for {symbol}: {e}")
+        return False, {"error": str(e)}
+
+def check_quality_filters(symbol, hist_df=None, current_iv=None):
+    """
+    Additional quality/risk filters for CSP opportunities.
+
+    Checks:
+    1. Earnings date (avoid within 14 days)
+    2. IV vs HV (prefer high IV premium)
+    3. 52-week low distance (avoid falling knives)
+    4. MACD signal (momentum turning positive)
+    5. Relative strength vs SPY (stock-specific weakness)
+
+    Returns: (passes_filters, quality_signals_dict)
+    """
+    try:
+        if hist_df is None:
+            ticker = yf.Ticker(symbol)
+            hist_df = ticker.history(period="1y", interval="1d")
+        else:
+            ticker = yf.Ticker(symbol)
+
+        if hist_df.empty or len(hist_df) < 30:
+            return False, {"error": "Insufficient data"}
+
+        signals = {}
+        warnings = []
+
+        # 1. Earnings Date Check
+        try:
+            calendar = ticker.calendar
+            if calendar is not None and 'Earnings Date' in calendar:
+                earnings_dates = calendar['Earnings Date']
+                if isinstance(earnings_dates, list) and len(earnings_dates) > 0:
+                    next_earnings = pd.to_datetime(earnings_dates[0])
+                    days_to_earnings = (next_earnings - pd.Timestamp.now()).days
+                    signals['days_to_earnings'] = days_to_earnings
+
+                    if days_to_earnings < 14:
+                        warnings.append(f"Earnings in {days_to_earnings} days")
+                        signals['earnings_warning'] = True
+                    else:
+                        signals['earnings_warning'] = False
+                else:
+                    signals['days_to_earnings'] = None
+                    signals['earnings_warning'] = False
+            else:
+                signals['days_to_earnings'] = None
+                signals['earnings_warning'] = False
+        except Exception:
+            signals['days_to_earnings'] = None
+            signals['earnings_warning'] = False
+
+        # 2. IV vs HV (if IV provided)
+        if current_iv and len(hist_df) >= 20:
+            returns = hist_df['Close'].pct_change().dropna()
+            hv_20 = returns[-20:].std() * np.sqrt(252) * 100  # Annualized HV
+            signals['hv_20'] = round(hv_20, 1)
+            signals['iv'] = round(current_iv, 1)
+
+            iv_premium_pct = ((current_iv - hv_20) / hv_20) * 100 if hv_20 > 0 else 0
+            signals['iv_premium_pct'] = round(iv_premium_pct, 1)
+
+            if iv_premium_pct >= 20:
+                signals['iv_signal'] = "High IV premium (good)"
+            elif iv_premium_pct >= 0:
+                signals['iv_signal'] = "Moderate IV premium"
+            else:
+                signals['iv_signal'] = "IV below HV (poor)"
+
+        # 3. Distance from 52-Week Low
+        low_52w = hist_df['Close'].min()
+        current_price = hist_df['Close'].iloc[-1]
+        distance_from_low_pct = ((current_price - low_52w) / low_52w) * 100
+        signals['distance_from_52w_low_pct'] = round(distance_from_low_pct, 1)
+
+        if distance_from_low_pct < 20:
+            warnings.append(f"Only {distance_from_low_pct:.0f}% above 52w low")
+            signals['low_distance_warning'] = True
+        else:
+            signals['low_distance_warning'] = False
+
+        # 4. MACD Signal
+        if len(hist_df) >= 35:
+            macd_indicator = MACDIndicator(close=hist_df['Close'], window_slow=26, window_fast=12, window_sign=9)
+            macd_line = macd_indicator.macd()
+            signal_line = macd_indicator.macd_signal()
+            macd_hist = macd_indicator.macd_diff()
+
+            if not macd_line.empty and not signal_line.empty:
+                current_macd = macd_line.iloc[-1]
+                current_signal = signal_line.iloc[-1]
+                current_hist = macd_hist.iloc[-1]
+                prev_hist = macd_hist.iloc[-2] if len(macd_hist) >= 2 else 0
+
+                signals['macd'] = round(current_macd, 3)
+                signals['macd_signal'] = round(current_signal, 3)
+                signals['macd_histogram'] = round(current_hist, 3)
+
+                # Check for bullish crossover or positive momentum
+                if current_macd > current_signal:
+                    signals['macd_status'] = "Bullish (crossed over)"
+                elif current_hist > prev_hist and current_hist > -0.5:
+                    signals['macd_status'] = "Turning bullish"
+                else:
+                    signals['macd_status'] = "Bearish"
+
+        # 5. Relative Strength vs SPY
+        if len(hist_df) >= 5:
+            try:
+                spy = yf.Ticker("SPY").history(period="10d", interval="1d")
+                if not spy.empty and len(spy) >= 5:
+                    stock_return_5d = ((hist_df['Close'].iloc[-1] / hist_df['Close'].iloc[-5]) - 1) * 100
+                    spy_return_5d = ((spy['Close'].iloc[-1] / spy['Close'].iloc[-5]) - 1) * 100
+                    relative_strength = stock_return_5d - spy_return_5d
+
+                    signals['stock_5d_return'] = round(stock_return_5d, 2)
+                    signals['spy_5d_return'] = round(spy_return_5d, 2)
+                    signals['relative_strength'] = round(relative_strength, 2)
+
+                    if -7 <= relative_strength <= -2:
+                        signals['rs_signal'] = "Ideal underperformance"
+                    elif relative_strength < -7:
+                        signals['rs_signal'] = "Severe underperformance"
+                    else:
+                        signals['rs_signal'] = "Not underperforming SPY"
+            except Exception:
+                pass
+
+        # 6. 20-Day MA Slope
+        if len(hist_df) >= 25:
+            ma_20 = hist_df['Close'].rolling(window=20).mean()
+            if not ma_20.empty and len(ma_20) >= 2:
+                current_ma = ma_20.iloc[-1]
+                prev_ma = ma_20.iloc[-5] if len(ma_20) >= 5 else ma_20.iloc[-2]
+                ma_slope = ((current_ma / prev_ma) - 1) * 100
+
+                signals['ma_20_slope'] = round(ma_slope, 2)
+
+                if ma_slope > 0:
+                    signals['ma_signal'] = "Uptrend"
+                else:
+                    signals['ma_signal'] = "Downtrend"
+
+        # Overall assessment
+        signals['warnings'] = warnings
+        passes = len(warnings) == 0  # Pass if no critical warnings
+
+        return passes, signals
+
+    except Exception as e:
+        print(f"   Quality filter error for {symbol}: {e}")
+        return True, {"error": str(e)}  # Default to pass on error
+
 def calculate_support_resistance(symbol, period="2y", force_refresh=False):
     cache = load_sr_cache()
     cache_key = symbol.upper()
@@ -256,11 +592,12 @@ def calculate_support_resistance(symbol, period="2y", force_refresh=False):
         
         
         # Define timeframes: MONTHS -> approximate trading days
+        # Use string keys for JSON compatibility
         timeframes = {
-            1: 21,    # 1 month ≈ 21 trading days
-            3: 63,    # 3 months ≈ 63 trading days
-            6: 126,   # 6 months ≈ 126 trading days
-            12: 252   # 12 months ≈ 252 trading days
+            '1': 21,    # 1 month ≈ 21 trading days
+            '3': 63,    # 3 months ≈ 63 trading days
+            '6': 126,   # 6 months ≈ 126 trading days
+            '12': 252   # 12 months ≈ 252 trading days
         }
         
         levels_count = 0
@@ -392,6 +729,22 @@ def find_high_probability_options(symbol, current_price, tier, regime, grok_sent
 
                     if premium < MIN_PREMIUM: continue
 
+                    # Liquidity filters
+                    open_interest = int(opt.get('openInterest', 0) or 0)
+                    total_volume = int(opt.get('totalVolume', 0) or 0)
+
+                    # Require minimum liquidity
+                    if open_interest < 100:
+                        continue  # Skip illiquid options
+                    if total_volume < 10 and open_interest < 500:
+                        continue  # Low volume OK if high OI
+
+                    # Bid-ask spread check
+                    if bid > 0 and ask > 0:
+                        spread_pct = ((ask - bid) / premium) * 100 if premium > 0 else 100
+                        if spread_pct > 15:  # Skip if spread > 15% of premium
+                            continue
+
                     delta = abs(float(opt.get('delta', 0) or 0))
                     if not (delta_min <= delta <= delta_max): continue
 
@@ -405,6 +758,9 @@ def find_high_probability_options(symbol, current_price, tier, regime, grok_sent
 
                     if annualized < MIN_ANNUALIZED: continue
 
+                    # Calculate bid-ask spread percentage
+                    spread_pct = ((ask - bid) / premium) * 100 if premium > 0 and bid > 0 and ask > 0 else 0
+
                     opportunities.append({
                         'symbol': symbol,
                         'strike': strike,
@@ -417,7 +773,13 @@ def find_high_probability_options(symbol, current_price, tier, regime, grok_sent
                         'distance': ((current_price - strike) / current_price) * 100,
                         'contract': opt.get('symbol', ''),
                         'iv': iv,
-                        'tier': get_symbol_tier(symbol)
+                        'tier': get_symbol_tier(symbol),
+                        # Liquidity metrics
+                        'open_interest': open_interest,
+                        'volume': total_volume,
+                        'bid_ask_spread_pct': round(spread_pct, 2),
+                        'bid': bid,
+                        'ask': ask
                     })
                 except: continue
 
@@ -429,15 +791,26 @@ def find_high_probability_options(symbol, current_price, tier, regime, grok_sent
 
 def improved_put_score(premium, delta, dte, annualized_roi, iv, vol_surge, rsi, in_uptrend, distance_pct=0, tier=3, capital=0, iv_rank=50, sr_risk_flag="Neutral", regime="MILD_BULL", sr_mult=1.0, **kwargs):
     """
-    Updated pre-Grok score with S/R bonus, stronger vol surge, and regime adjustment.
+    Updated pre-Grok score with S/R bonus, vol surge, and NEW quality filters.
+
+    New additions:
+    - rebound_score: 0-15 score for rebound signals
+    - quality_signals: earnings, IV premium, 52w low, MACD, RS
+    - liquidity: OI, volume, spread
     """
+    # Extract new signals from kwargs
+    rebound_score = kwargs.get('rebound_score', 0)
+    quality_signals = kwargs.get('quality_signals', {})
+    open_interest = kwargs.get('open_interest', 0)
+    bid_ask_spread_pct = kwargs.get('bid_ask_spread_pct', 0)
+
     optimal_delta = 0.30
     delta_bonus = 1 + (1 - abs(delta - optimal_delta) / optimal_delta) * 0.6
     if delta < 0.15:
         delta_bonus *= 0.8
-    
+
     base = premium * delta_bonus
-    
+
     vol_mult = 1 + min(vol_surge, 2.0) * 0.15  # Increased weight for surges
     rsi_mult = 1.15 if rsi < 50 else 1.0
     trend_mult = 1.2 if in_uptrend else 0.9
@@ -457,6 +830,15 @@ def improved_put_score(premium, delta, dte, annualized_roi, iv, vol_surge, rsi, 
         iv_mult = 1.1   # Very high — yield great but high risk
     else:
         iv_mult = 0.9   # Extreme — avoid (meme crashes, earnings bombs)
+
+    # NEW: IV Premium bonus (IV vs HV)
+    iv_premium_pct = quality_signals.get('iv_premium_pct', 0)
+    if iv_premium_pct >= 30:
+        iv_mult *= 1.15  # Very overpriced options
+    elif iv_premium_pct >= 20:
+        iv_mult *= 1.10  # Good IV premium
+    elif iv_premium_pct < 0:
+        iv_mult *= 0.95  # IV below HV (poor)
     
     # DTE multiplier
     if dte < 14:
@@ -505,25 +887,92 @@ def improved_put_score(premium, delta, dte, annualized_roi, iv, vol_surge, rsi, 
     if regime in ["CAUTIOUS", "BEARISH_HIGH_VOL"]:
         regime_mult = 0.9 if delta > 0.30 else 1.1  # Favor lower delta in defensive regimes
 
+    # NEW: Rebound score bonus (0-15 scale)
+    rebound_mult = 1.0
+    if rebound_score >= 10:
+        rebound_mult = 1.20  # Strong rebound signals
+    elif rebound_score >= 7:
+        rebound_mult = 1.10  # Good rebound signals
+    elif rebound_score >= 4:
+        rebound_mult = 1.05  # Moderate signals
+
+    # NEW: Quality warnings penalties
+    quality_mult = 1.0
+    warnings = quality_signals.get('warnings', [])
+    if warnings:
+        # Earnings warning is critical
+        if quality_signals.get('earnings_warning'):
+            quality_mult *= 0.75  # 25% penalty for upcoming earnings
+        # 52w low warning
+        if quality_signals.get('low_distance_warning'):
+            quality_mult *= 0.85  # 15% penalty for falling knife risk
+
+    # NEW: Liquidity bonus/penalty
+    liquidity_mult = 1.0
+    if open_interest >= 1000:
+        liquidity_mult = 1.10  # Excellent liquidity
+    elif open_interest >= 500:
+        liquidity_mult = 1.05  # Good liquidity
+    elif open_interest < 100:
+        liquidity_mult = 0.90  # Poor liquidity
+
+    if bid_ask_spread_pct > 10:
+        liquidity_mult *= 0.95  # Wide spread penalty
+    elif bid_ask_spread_pct < 5:
+        liquidity_mult *= 1.05  # Tight spread bonus
+
+    # NEW: MACD momentum bonus
+    macd_status = quality_signals.get('macd_status', '')
+    macd_mult = 1.0
+    if 'Bullish' in macd_status and 'crossed' in macd_status:
+        macd_mult = 1.08  # Strong bullish crossover
+    elif 'Turning bullish' in macd_status:
+        macd_mult = 1.04  # About to cross
+
+    # NEW: Relative strength bonus (underperforming SPY is good for CSP)
+    rs = quality_signals.get('relative_strength', 0)
+    rs_mult = 1.0
+    if -7 <= rs <= -2:
+        rs_mult = 1.08  # Ideal underperformance
+    elif rs < -7:
+        rs_mult = 0.95  # Too weak
+
     # Apply all multipliers
-    score = base * iv_mult * dte_mult * vol_mult * rsi_mult * trend_mult * distance_mult * tier_mult * sr_mult * regime_mult * capital_mult
-    
+    score = (base * iv_mult * dte_mult * vol_mult * rsi_mult * trend_mult *
+             distance_mult * tier_mult * sr_mult * regime_mult * capital_mult *
+             rebound_mult * quality_mult * liquidity_mult * macd_mult * rs_mult)
+
     final_score = (score * 8 + annualized_roi * 2) / 2
     return final_score
 
 # ==================== MAIN ====================
 async def analyze_symbol(symbol, regime, grok_sentiment):
     print(f"Checking {symbol:<6}", end=" ", flush=True)
-    
+
     tier = get_symbol_tier(symbol)
+
+    # Fetch data once for both checks
+    try:
+        ticker = yf.Ticker(symbol)
+        hist_df = ticker.history(period="70d", interval="1d")
+    except Exception as e:
+        print(f"| Data fetch failed - Skipped")
+        return None
+
+    # Legacy RSI check
     is_safe, rsi, price = is_red_day(symbol)
-    
+
+    # New comprehensive rebound check
+    is_rebound_candidate, rebound_signals = check_rebound_signals(symbol, hist_df)
+
     if not is_safe:
         print(f"| RSI {rsi:.1f} (Too Hot) - Skipped")
         return None
-    
-    print(f"| RSI {rsi:.1f} | Tier {tier}", end=" ")
-    
+
+    # Display rebound score
+    rebound_score = rebound_signals.get('total_score', 0)
+    print(f"| RSI {rsi:.1f} | Rebound {rebound_score}/15 | Tier {tier}", end=" ")
+
     opps = find_high_probability_options(symbol, price, tier, regime, grok_sentiment)
     if opps:
         print(f"| FOUND {len(opps)}")
@@ -531,6 +980,10 @@ async def analyze_symbol(symbol, regime, grok_sentiment):
             o['rsi'] = rsi
             o['regime'] = regime['name']
             o['grok_sentiment'] = grok_sentiment
+            # Add rebound signals to opportunity data
+            o['rebound_score'] = rebound_score
+            o['rebound_signals'] = rebound_signals
+            o['is_rebound_candidate'] = is_rebound_candidate
         
     for o in tqdm(captured_opportunities, desc="Grok Analysis", unit="trade"):
         try:
@@ -603,24 +1056,53 @@ async def main():
 
     async def bounded_scan(sym):
         async with sem:
+            # Fetch historical data once for both checks
+            try:
+                ticker = yf.Ticker(sym)
+                hist_df = ticker.history(period="70d", interval="1d")
+            except Exception:
+                print(f" → Data fetch failed")
+                return []
+
+            # RSI check
             is_safe, rsi, price = is_red_day(sym)
             if not is_safe:
                 return []
 
+            # Rebound signals check
+            is_rebound_candidate, rebound_signals = check_rebound_signals(sym, hist_df)
+
+            # Quality filters check (earnings, IV, 52w low, MACD, RS)
+            # We'll get IV from first opportunity later, for now pass None
+            passes_quality, quality_signals = check_quality_filters(sym, hist_df, current_iv=None)
+
             opps = find_high_probability_options(sym, price, get_symbol_tier(sym), regime, grok_sentiment)
-            
+
             if not opps:
                 return []  # No opportunities → skip S/R fetch entirely
-            
+
             sr_levels = calculate_support_resistance(sym)
 
-            # Attach RSI
+            # Attach metadata to each opportunity
+            rebound_score = rebound_signals.get('total_score', 0)
+
+            # Update quality signals with actual IV from first opportunity
+            if opps and 'iv' in opps[0]:
+                passes_quality, quality_signals = check_quality_filters(sym, hist_df, current_iv=opps[0]['iv'])
+
             for o in opps:
                 o['rsi'] = rsi
                 o['support_resistance'] = sr_levels
+                # Add rebound signals
+                o['rebound_score'] = rebound_score
+                o['rebound_signals'] = rebound_signals
+                o['is_rebound_candidate'] = is_rebound_candidate
+                # Add quality signals
+                o['quality_signals'] = quality_signals
+                o['passes_quality_filters'] = passes_quality
 
                 sr_risk = "Neutral"
-                sr = sr_levels.get(3, {})  # 3-month
+                sr = sr_levels.get('3', {})  # 3-month
                 support_3m = sr.get('support')
                 if support_3m is not None:
                     if o['strike'] < support_3m * 0.97:
@@ -631,7 +1113,8 @@ async def main():
                         sr_risk = "High (at/above 3m support)"
                 o['sr_risk_flag'] = sr_risk
 
-            status = f"Found {len(opps)} opps" if opps else "No qualifying puts"
+            warnings_str = f" ⚠️ {len(quality_signals.get('warnings', []))} warnings" if quality_signals.get('warnings') else ""
+            status = f"Found {len(opps)} opps (Rebound: {rebound_score}/15{warnings_str})" if opps else "No qualifying puts"
             print(f" → {status}")
             return opps
     
@@ -659,9 +1142,14 @@ async def main():
         rsi=x.get('rsi', 50),
         in_uptrend=True,
         tier=x.get('tier', 3),
-        capital=x['capital'], 
+        capital=x['capital'],
         iv_rank=x.get('iv_rank', 50),
-        sr_risk_flag=x.get('sr_risk_flag', 'Neutral')
+        sr_risk_flag=x.get('sr_risk_flag', 'Neutral'),
+        # NEW: Quality & rebound signals
+        rebound_score=x.get('rebound_score', 0),
+        quality_signals=x.get('quality_signals', {}),
+        open_interest=x.get('open_interest', 0),
+        bid_ask_spread_pct=x.get('bid_ask_spread_pct', 0)
     ), reverse=True)
 
     for i, opp in enumerate(all_opps):
@@ -671,9 +1159,27 @@ async def main():
 
     top_10_msg = "🌟 TOP 10 GLOBAL RANKED OPPORTUNITIES:\n\n"
     for i, opp in enumerate(all_opps[:10], 1):
+        score = improved_put_score(
+            premium=opp['premium'],
+            delta=opp['delta'],
+            dte=opp['dte'],
+            annualized_roi=opp['annualized_roi'],
+            iv=opp['iv'],
+            vol_surge=opp.get('vol_surge', 0.5),
+            rsi=opp.get('rsi', 50),
+            in_uptrend=True,
+            distance_pct=opp['distance'],
+            tier=opp.get('tier', 3),
+            capital=opp['capital'],
+            sr_risk_flag=opp.get('sr_risk_flag', 'Neutral'),
+            rebound_score=opp.get('rebound_score', 0),
+            quality_signals=opp.get('quality_signals', {}),
+            open_interest=opp.get('open_interest', 0),
+            bid_ask_spread_pct=opp.get('bid_ask_spread_pct', 0)
+        )
         top_10_msg += (
             f"#{i} {opp['symbol']} — {opp['dte']} DTE ${opp['strike']:.0f}P\n"
-            f"Score: {improved_put_score(opp['premium'], opp['delta'], opp['dte'], opp['annualized_roi'], opp['iv'], opp.get('vol_surge', 0.5), opp.get('rsi', 50), True):.1f}/100\n"
+            f"Score: {score:.1f}/100 | Rebound: {opp.get('rebound_score', 0)}/15\n"
             f"Premium: ${opp['premium']:.2f} | Annualized: {opp['annualized_roi']:.1f}%\n"
             f"Delta: {opp['delta']:.2f} | Distance: {opp['distance']:.1f}%\n\n"
         )
@@ -698,9 +1204,9 @@ async def main():
         for opp in batch:
             sr = opp.get('support_resistance', {})
             sr_risk = "Neutral"
-            
-            if sr and 3 in sr:
-                support_3m = sr[3].get('support')
+
+            if sr and '3' in sr:
+                support_3m = sr['3'].get('support')
                 if support_3m is not None:
                     strike = opp['strike']
                     if strike < support_3m * 0.97:
@@ -722,15 +1228,23 @@ async def main():
 
             KEY PRIORITIES (in rough order of importance):
                 1. Premium yield + Annualized ROI (higher = much better)
-                2. Safety: 
-                    - Lower delta: BEST = .20-.30 delta, GOOD = .31-.37 delta, PENALIZE > .38 delta 
-                    - Further OTM distance: BEST = 10% and Above OTM %, GOOD = 5% - 9.9% OTM %, PENALIZE < 4.9 OTM % 
+                2. Safety:
+                    - Lower delta: BEST = .20-.30 delta, GOOD = .31-.37 delta, PENALIZE > .38 delta
+                    - Further OTM distance: BEST = 10% and Above OTM %, GOOD = 5% - 9.9% OTM %, PENALIZE < 4.9 OTM %
                     - strike well below support
                 3. DTE: BEST = 25–45 days (peak score), GOOD = 14-25 or 46–60 days, PENALIZE <14 or >60 days
                 4. IV: BEST = 60–100% (high premium without extreme risk), GOOD = 50–60% or 100–120%, PENALIZE <40% (low yield) or >130% (meme/crash risk)
-                5. RSI: Lower/oversold = better entry (bonus if <50)
-                6. Tier 1 stocks preferred, followed by Tier 2; Tier 3 only in strong bullish regimes, strong premium, and safe setups
-                7. S/R Risk: "Low (well below 3m support)" = big boost, "High" = penalty
+                5. IV Premium: BONUS if IV > HV by 20%+ (selling overpriced options)
+                6. RSI: Lower/oversold = better entry (bonus if <50)
+                7. Rebound Score: Higher = better timing (10+/15 = excellent, 7-9/15 = good)
+                8. Tier 1 stocks preferred, followed by Tier 2; Tier 3 only in strong bullish regimes, strong premium, and safe setups
+                9. S/R Risk: "Low (well below 3m support)" = big boost, "High" = penalty
+                10. Quality Warnings:
+                    - Earnings within 14 days = HIGH RISK (major penalty)
+                    - Stock < 20% above 52w low = falling knife risk (penalty)
+                11. Liquidity: Higher OI (500+) and tighter spread (<5%) = better execution
+                12. MACD: Bullish crossover or turning positive = momentum bonus
+                13. Relative Strength: Underperforming SPY by 3-7% = ideal (stock-specific dip)
 
             Score guide (0–100):
             - 90–100: Exceptional wheel setup (high yield + very safe)
@@ -773,6 +1287,43 @@ async def main():
             # === Support/Resistance Multi-Timeframe Display ===
             sr_risk = opp.get('sr_risk_flag', 'Unknown')
 
+            # === Get new signals for this opportunity ===
+            quality = opp.get('quality_signals', {})
+            rebound = opp.get('rebound_signals', {})
+
+            # Build quality context string
+            quality_str = ""
+            if quality.get('warnings'):
+                quality_str += f"\n                ⚠️ WARNINGS: {', '.join(quality['warnings'])}"
+            if quality.get('days_to_earnings'):
+                quality_str += f"\n                Earnings: {quality['days_to_earnings']} days away"
+            if quality.get('iv_premium_pct') is not None:
+                quality_str += f"\n                IV Premium: {quality['iv_premium_pct']}% (IV vs HV)"
+            if quality.get('distance_from_52w_low_pct'):
+                quality_str += f"\n                Distance from 52w Low: {quality['distance_from_52w_low_pct']}%"
+            if quality.get('macd_status'):
+                quality_str += f"\n                MACD: {quality['macd_status']}"
+            if quality.get('relative_strength') is not None:
+                quality_str += f"\n                vs SPY (5d): {quality['relative_strength']}%"
+
+            # Build rebound context string
+            rebound_str = ""
+            if rebound.get('total_score'):
+                rebound_str += f"\n                Rebound Score: {rebound['total_score']}/15"
+                if rebound.get('drawdown_pct'):
+                    rebound_str += f" | Drawdown: {rebound['drawdown_pct']}%"
+                if rebound.get('consecutive_red_days'):
+                    rebound_str += f" | Red Days: {rebound['consecutive_red_days']}"
+
+            # Liquidity info
+            liquidity_str = ""
+            if opp.get('open_interest'):
+                liquidity_str += f"\n                Open Interest: {opp['open_interest']:,}"
+            if opp.get('volume') is not None:
+                liquidity_str += f" | Volume: {opp['volume']}"
+            if opp.get('bid_ask_spread_pct'):
+                liquidity_str += f" | Spread: {opp['bid_ask_spread_pct']:.1f}%"
+
             # === Append Opportunity Details ===
             full_prompt += f"""
                 --- OPPORTUNITY {idx} ---
@@ -787,11 +1338,11 @@ async def main():
                 RSI: {opp['rsi']:.1f}
                 Distance OTM: {opp['distance']:.1f}%
                 Tier: {opp.get('tier', 3)}
-                S/R Risk (vs 3m support): {sr_risk}
+                S/R Risk (vs 3m support): {sr_risk}{rebound_str}{quality_str}{liquidity_str}
 
                 SCORE: [Your 0-100 score here]
                 RECOMMENDATION: [MUST be one of: Enter Now, Strong Enter, Consider Entering, Hold/Monitor, Avoid]
-                REASON: [MINIMUM 25 WORDS - Write 2-4 complete sentences explaining ROI, safety metrics, technical factors, and S/R context with specific numbers]
+                REASON: [MINIMUM 25 WORDS - Write 2-4 complete sentences explaining ROI, safety metrics, technical factors, rebound potential, quality warnings, and liquidity with specific numbers]
                 --- END ---
                 """
 

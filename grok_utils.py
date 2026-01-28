@@ -99,8 +99,17 @@ def get_grok_sentiment_cached(symbol=None):
             except:
                 pass
 
-        # Get fresh market analysis
-        analysis = get_grok_analysis("SPY", "Analyze overall market sentiment, direction, and key drivers.")
+        # Get fresh market analysis with focus on CSP opportunities
+        analysis = get_grok_analysis("SPY", """Analyze overall market sentiment for cash-secured put opportunities.
+
+In your 3-4 sentence analysis, discuss:
+1. Current market direction and VIX/volatility levels
+2. Whether this creates good CSP entry opportunities (oversold bounces, high IV premiums)
+3. Sectors or stock types showing rebound potential (technical oversold, recent pullbacks)
+4. Any earnings season or macro risks to avoid
+5. Liquidity and execution considerations
+
+Focus on actionable insights for selling puts on quality stocks at attractive prices.""")
         sentiment = "NEUTRAL"
 
         if "bullish" in analysis.lower() or "strong" in analysis.lower():
