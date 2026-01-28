@@ -3733,6 +3733,19 @@ def generate_html():
                         try {
                             const url = forceRefresh ? '/api/open_csps?force_refresh=true' : '/api/open_csps';
                             const response = await fetch(url);
+
+                            // Check if response is OK
+                            if (!response.ok) {
+                                let errorMsg = `Server error (${response.status})`;
+                                try {
+                                    const errorData = await response.json();
+                                    errorMsg = errorData.error || errorMsg;
+                                } catch (e) {
+                                    errorMsg = await response.text() || errorMsg;
+                                }
+                                throw new Error(errorMsg);
+                            }
+
                             const data = await response.json();
 
                             if (data.error) {
@@ -3755,7 +3768,9 @@ def generate_html():
 
                         } catch (error) {
                             console.error('CSP refresh failed:', error);
-                            alert('Failed to refresh CSPs: ' + error.message);
+                            // Show detailed error message
+                            const errorMsg = error.message || 'Unknown error occurred';
+                            alert(`Failed to refresh CSPs:\n\n${errorMsg}\n\nCheck browser console for details.`);
                         } finally {
                             // Restore button state
                             if (refreshBtn) refreshBtn.disabled = false;

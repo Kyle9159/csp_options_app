@@ -1950,12 +1950,14 @@ def get_open_csps():
         JSON with enriched CSP positions and summary statistics
     """
     try:
+        logger.info("Open CSPs endpoint called")
         import asyncio
         from open_trade_monitor import load_trades_from_sheet, enrich_trade_with_live_data
         from schwab_utils import get_client
         from datetime import datetime
 
         force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
+        logger.info(f"Force refresh: {force_refresh}")
 
         # Simple in-memory cache (5 minute TTL for normal requests)
         cache_key = 'open_csps_data'
@@ -1971,8 +1973,10 @@ def get_open_csps():
         logger.info(f"Fetching fresh Open CSPs data (force_refresh={force_refresh})")
 
         # Load trades from sheet
+        logger.info("Loading trades from sheet...")
         df, _ = load_trades_from_sheet()
         if df is None or df.empty:
+            logger.warning("No trades loaded from sheet")
             return jsonify({'csps': [], 'summary': {}, 'last_updated': datetime.now().isoformat()})
 
         # Get unique symbols to fetch quotes for
