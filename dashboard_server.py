@@ -1763,6 +1763,122 @@ def execute_close_put():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@app.route('/api/opportunity/live', methods=['GET'])
+def get_live_opportunity_data():
+    """
+    Get live data for a specific opportunity.
+
+    Query params:
+        symbol: Underlying symbol (e.g., 'AAPL')
+        strike: Strike price (e.g., 175.0)
+        expiration: Expiration date in YYYY-MM-DD format
+
+    Returns:
+        JSON with live metrics:
+        {
+            'current_price': float,
+            'premium': float (current bid),
+            'bid': float,
+            'ask': float,
+            'spread_pct': float,
+            'delta': float,
+            'gamma': float,
+            'theta': float,
+            'vega': float,
+            'iv': float,
+            'open_interest': int,
+            'volume': int,
+            'distance_pct': float (strike vs current price),
+            'last_update': timestamp,
+            'error': str (if any)
+        }
+    """
+    try:
+        symbol = request.args.get('symbol', '').upper()
+        strike = float(request.args.get('strike'))
+        expiration = request.args.get('expiration')  # YYYY-MM-DD format
+
+        if not symbol or not strike or not expiration:
+            return jsonify({'error': 'Missing required parameters'}), 400
+
+        from schwab_utils import get_schwab_client
+
+        # Get current stock price
+        ticker = yf.Ticker(symbol)
+        current_price = ticker.info.get('currentPrice') or ticker.info.get('regularMarketPrice', 0)
+
+        if not current_price:
+            hist = ticker.history(period="1d")
+            if not hist.empty:
+                current_price = hist['Close'].iloc[-1]
+
+        # Get option chain
+        client = get_schwab_client()
+        chain_resp = client.get_option_chain(
+            symbol,
+            contract_type="PUT",
+            strike_count=50,
+            include_underlying_quote=True,
+            from_date=expiration,
+            to_date=expiration
+        )
+
+        if not chain_resp or 'putExpDateMap' not in chain_resp:
+            return jsonify({'error': 'No option data available'}), 404
+
+        # Find the matching strike in the chain
+        option_data = None
+        for exp_date, strikes in chain_resp['putExpDateMap'].items():
+            strike_key = f"{strike:.1f}"
+            if strike_key in strikes:
+                contracts = strikes[strike_key]
+                if contracts:
+                    option_data = contracts[0]
+                    break
+
+        if not option_data:
+            return jsonify({'error': f'No data for strike {strike}'}), 404
+
+        # Extract live metrics
+        bid = option_data.get('bid', 0)
+        ask = option_data.get('ask', 0)
+        premium = bid  # Premium is what you receive (bid price)
+        spread_pct = ((ask - bid) / ((ask + bid) / 2) * 100) if (ask + bid) > 0 else 0
+
+        distance_pct = ((strike - current_price) / current_price * 100) if current_price > 0 else 0
+
+        result = {
+            'symbol': symbol,
+            'strike': strike,
+            'expiration': expiration,
+            'current_price': round(current_price, 2),
+            'premium': round(premium, 2),
+            'bid': round(bid, 2),
+            'ask': round(ask, 2),
+            'spread_pct': round(spread_pct, 2),
+            'delta': round(option_data.get('delta', 0), 4),
+            'gamma': round(option_data.get('gamma', 0), 4),
+            'theta': round(option_data.get('theta', 0), 4),
+            'vega': round(option_data.get('vega', 0), 4),
+            'iv': round(option_data.get('volatility', 0) * 100, 2),  # Convert to percentage
+            'open_interest': int(option_data.get('openInterest', 0)),
+            'volume': int(option_data.get('totalVolume', 0)),
+            'distance_pct': round(distance_pct, 2),
+            'last_update': datetime.now().isoformat(),
+            'success': True
+        }
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Live opportunity data API failed for {symbol} ${strike}: {e}")
+        return jsonify({
+            'error': str(e),
+            'success': False,
+            'last_update': datetime.now().isoformat()
+        }), 500
+
+
 @app.route('/api/option/quote', methods=['GET'])
 def get_option_quote_api():
     """

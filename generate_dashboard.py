@@ -2524,9 +2524,17 @@ def generate_html():
                                         <div style="margin-top: 16px;">
                                             {% for opp in tile.suggestions %}
                                                 {% if opp.strike is defined %}
-                                                    <div class="csp-tile" 
-                                                        data-premium="{{ opp.premium|default(0) }}" 
+                                                    <div class="csp-tile"
+                                                        data-premium="{{ opp.premium|default(0) }}"
                                                         data-capital="{{ opp.capital|default(0) }}"
+                                                        data-symbol="{{ tile.symbol }}"
+                                                        data-strike="{{ opp.strike }}"
+                                                        data-expiration="{{ opp.expiration_date }}"
+                                                        data-current-price="{{ opp.current_price|default(0) }}"
+                                                        data-delta="{{ opp.delta|default(0) }}"
+                                                        data-iv="{{ opp.iv|default(0) }}"
+                                                        data-oi="{{ opp.open_interest|default(0) }}"
+                                                        data-volume="{{ opp.volume|default(0) }}"
                                                         style="background:rgba(15,23,42,0.9); padding:18px; border-radius:14px; margin-bottom:14px; border-left:5px solid #34d399; box-shadow:0 6px 16px rgba(0,0,0,0.4);">
 
                                                         <!-- Rank & Header -->
@@ -2540,6 +2548,9 @@ def generate_html():
                                                                     <span style="color:#94a3b8; margin-left:8px; font-size:0.95rem;">
                                                                         (Pre-Grok #{{ opp.global_rank|default('?') }})
                                                                     </span>
+                                                                    <div style="font-size:0.75rem; color:#64748b; margin-top:4px;">
+                                                                        <span class="live-update-status">📡 Live</span>
+                                                                    </div>
                                                                 </div>
                                                             </div>
                                                             <div style="text-align:right;">
@@ -2565,9 +2576,18 @@ def generate_html():
 
                                                         <!-- Key Metrics -->
                                                         <div style="line-height:1.7; color:#cbd5e1; margin-bottom:16px;">
-                                                            Premium: <strong style="color:#34d399;">${{ opp.premium|safe_format("%.2f") }}</strong> • 
+                                                            Premium: <strong style="color:#34d399;" class="live-premium">${{ opp.premium|safe_format("%.2f") }}</strong>
+                                                            <span class="live-premium-change" style="margin-left:4px; font-size:0.85rem; font-weight:bold;"></span> •
                                                             Ann ROI: <strong>{{ opp.annualized_roi|safe_format("%.1f") }}%</strong><br>
-                                                            Delta: {{ opp.delta|safe_format("%.2f") }} • Dist: {{ opp.distance|safe_format("%.1f") }}% OTM • IV: {{ opp.iv|safe_format("%.0f") }}
+                                                            Delta: <span class="live-delta">{{ opp.delta|safe_format("%.2f") }}</span> •
+                                                            Dist: <span class="live-distance">{{ opp.distance|safe_format("%.1f") }}%</span> OTM •
+                                                            IV: <span class="live-iv">{{ opp.iv|safe_format("%.0f") }}</span>
+                                                            <br>
+                                                            <span style="font-size:0.85rem; color:#94a3b8;">
+                                                                OI: <span class="live-oi">{{ opp.open_interest|default(0)|safe_format("%.0f") }}</span> •
+                                                                Vol: <span class="live-volume">{{ opp.volume|default(0)|safe_format("%.0f") }}</span> •
+                                                                Spread: <span class="live-spread">N/A</span>
+                                                            </span>
                                                         </div>
 
                                                         <!-- Contracts Calculator — Per Opportunity -->
@@ -2721,12 +2741,13 @@ def generate_html():
                 </div>  <!-- ← Closes id="scanner" -->
 
                 <script>
+                // Contract selector calculator
                 document.querySelectorAll('.contract-selector').forEach(selector => {
                     selector.addEventListener('change', function() {
                         const tile = this.closest('.csp-tile');
                         if (!tile) return;
                         const contracts = parseInt(this.value) || 1;
-                        
+
                         const premiumPer = parseFloat(tile.dataset.premium || 0);
                         const capitalPer = parseFloat(tile.dataset.capital || 0);
 
@@ -2739,6 +2760,160 @@ def generate_html():
                         tile.querySelector('.dynamic-profit').textContent = '$' + profit50.toLocaleString('en-US', {minimumFractionDigits: 0});
                     });
                 });
+
+                // Live data polling for opportunities
+                const LIVE_UPDATE_INTERVAL = 45000; // 45 seconds
+                let liveUpdateIntervals = {};
+
+                function startLiveUpdates() {
+                    const opportunities = document.querySelectorAll('.csp-tile[data-symbol][data-strike][data-expiration]');
+                    console.log(`Starting live updates for ${opportunities.length} opportunities`);
+
+                    opportunities.forEach(tile => {
+                        const symbol = tile.dataset.symbol;
+                        const strike = tile.dataset.strike;
+                        const expiration = tile.dataset.expiration;
+
+                        if (!symbol || !strike || !expiration) return;
+
+                        // Initial update
+                        updateOpportunityData(tile);
+
+                        // Set up periodic updates
+                        const key = `${symbol}-${strike}-${expiration}`;
+                        if (!liveUpdateIntervals[key]) {
+                            liveUpdateIntervals[key] = setInterval(() => {
+                                updateOpportunityData(tile);
+                            }, LIVE_UPDATE_INTERVAL);
+                        }
+                    });
+                }
+
+                async function updateOpportunityData(tile) {
+                    const symbol = tile.dataset.symbol;
+                    const strike = tile.dataset.strike;
+                    const expiration = tile.dataset.expiration;
+                    const statusEl = tile.querySelector('.live-update-status');
+
+                    try {
+                        if (statusEl) statusEl.textContent = '⏳ Updating...';
+
+                        const response = await fetch(`/api/opportunity/live?symbol=${symbol}&strike=${strike}&expiration=${expiration}`);
+                        const data = await response.json();
+
+                        if (!data.success) {
+                            console.error(`Failed to fetch live data for ${symbol} $${strike}:`, data.error);
+                            if (statusEl) statusEl.textContent = '⚠️ Error';
+                            return;
+                        }
+
+                        // Store previous values for change detection
+                        const prevPremium = parseFloat(tile.dataset.premium || 0);
+                        const prevPrice = parseFloat(tile.dataset.currentPrice || 0);
+                        const prevDelta = parseFloat(tile.dataset.delta || 0);
+
+                        // Update stored data
+                        tile.dataset.premium = data.premium;
+                        tile.dataset.currentPrice = data.current_price;
+                        tile.dataset.delta = data.delta;
+                        tile.dataset.iv = data.iv;
+                        tile.dataset.oi = data.open_interest;
+                        tile.dataset.volume = data.volume;
+
+                        // Update Premium with change indicator
+                        const premiumEl = tile.querySelector('.live-premium');
+                        const premiumChangeEl = tile.querySelector('.live-premium-change');
+                        if (premiumEl) {
+                            premiumEl.textContent = `$${data.premium.toFixed(2)}`;
+                            if (premiumChangeEl && prevPremium > 0) {
+                                const change = data.premium - prevPremium;
+                                if (Math.abs(change) > 0.01) {
+                                    const arrow = change > 0 ? '▲' : '▼';
+                                    const color = change > 0 ? '#34d399' : '#fb923c';
+                                    premiumChangeEl.textContent = `${arrow} $${Math.abs(change).toFixed(2)}`;
+                                    premiumChangeEl.style.color = color;
+
+                                    // Flash animation
+                                    premiumEl.style.transition = 'all 0.3s ease';
+                                    premiumEl.style.backgroundColor = `${color}33`;
+                                    setTimeout(() => {
+                                        premiumEl.style.backgroundColor = 'transparent';
+                                    }, 1000);
+                                }
+                            }
+                        }
+
+                        // Update Greeks
+                        const deltaEl = tile.querySelector('.live-delta');
+                        if (deltaEl) {
+                            deltaEl.textContent = data.delta.toFixed(2);
+                            if (Math.abs(data.delta - prevDelta) > 0.01) {
+                                deltaEl.style.transition = 'all 0.3s ease';
+                                deltaEl.style.color = '#fbbf24';
+                                setTimeout(() => { deltaEl.style.color = '#cbd5e1'; }, 1000);
+                            }
+                        }
+
+                        const ivEl = tile.querySelector('.live-iv');
+                        if (ivEl) ivEl.textContent = data.iv.toFixed(0);
+
+                        // Update Distance
+                        const distanceEl = tile.querySelector('.live-distance');
+                        if (distanceEl) distanceEl.textContent = data.distance_pct.toFixed(1) + '%';
+
+                        // Update OI, Volume, Spread
+                        const oiEl = tile.querySelector('.live-oi');
+                        if (oiEl) oiEl.textContent = data.open_interest.toLocaleString();
+
+                        const volumeEl = tile.querySelector('.live-volume');
+                        if (volumeEl) volumeEl.textContent = data.volume.toLocaleString();
+
+                        const spreadEl = tile.querySelector('.live-spread');
+                        if (spreadEl) {
+                            spreadEl.textContent = data.spread_pct.toFixed(1) + '%';
+                            spreadEl.style.color = data.spread_pct < 5 ? '#34d399' : data.spread_pct < 10 ? '#fbbf24' : '#fb923c';
+                        }
+
+                        // Update status
+                        if (statusEl) {
+                            const now = new Date();
+                            statusEl.textContent = `📡 ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
+                            statusEl.style.color = '#34d399';
+                        }
+
+                    } catch (error) {
+                        console.error(`Error updating ${symbol} $${strike}:`, error);
+                        if (statusEl) {
+                            statusEl.textContent = '⚠️ Failed';
+                            statusEl.style.color = '#fb923c';
+                        }
+                    }
+                }
+
+                function stopLiveUpdates() {
+                    Object.values(liveUpdateIntervals).forEach(interval => clearInterval(interval));
+                    liveUpdateIntervals = {};
+                    console.log('Stopped all live updates');
+                }
+
+                // Start live updates when on scanner tab
+                document.addEventListener('DOMContentLoaded', () => {
+                    const scannerTab = document.querySelector('[onclick*="scanner"]');
+                    if (scannerTab) {
+                        scannerTab.addEventListener('click', () => {
+                            setTimeout(startLiveUpdates, 500);
+                        });
+                    }
+
+                    // Auto-start if scanner tab is default
+                    const scannerContent = document.getElementById('scanner');
+                    if (scannerContent && scannerContent.classList.contains('active')) {
+                        startLiveUpdates();
+                    }
+                });
+
+                // Cleanup on page unload
+                window.addEventListener('beforeunload', stopLiveUpdates);
                 </script>
 
                 <!-- 0DTE Opportunities -->
