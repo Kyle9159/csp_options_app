@@ -39,7 +39,7 @@ import pytz
 from ta.momentum import RSIIndicator
 from ta.trend import SMAIndicator, MACD as MACDIndicator
 from telegram import Bot as telegram_bot
-from grok_utils import get_grok_opportunity_analysis, get_grok_sentiment_cached, get_grok_analysis, parse_grok_batch_response
+from grok_utils import get_grok_opportunity_analysis, get_grok_sentiment_cached, parse_grok_batch_response
 from helper_functions import save_cached_scanner, load_sr_cache, save_sr_cache
 from schwab_utils import get_client
 
@@ -1352,30 +1352,14 @@ async def main():
                 """
 
         try:
-            # Call get_grok_analysis correctly with symbol and context parameters
-            # Use empty symbol to avoid prepending, and pass prompt as context
-            from grok_utils import GROK_API_KEY, GROK_ENDPOINT
-            import requests
-
-            # Direct API call to avoid the prepended text from get_grok_analysis
-            response_obj = requests.post(
-                GROK_ENDPOINT,
-                headers={
-                    "Authorization": f"Bearer {GROK_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": "grok-4-1-fast-reasoning",
-                    "messages": [{"role": "user", "content": full_prompt}],
-                    "max_tokens": 2000  # Increased for batch analysis
-                }
-            )
-
-            if response_obj.status_code == 200:
-                response = response_obj.json()['choices'][0]['message']['content']
-            else:
-                print(f"Grok API error: {response_obj.status_code}")
-                response = ""
+            # Use call_grok for proper system prompt, usage tracking, and model routing
+            from grok_utils import call_grok, MODEL_FAST
+            response = call_grok(
+                [{"role": "system", "content": "You are a quantitative CSP analyst. Follow the format exactly."},
+                 {"role": "user", "content": full_prompt}],
+                model=MODEL_FAST,
+                max_tokens=2000,
+            ) or ""
             # print(f"DEBUG: Batch {i//BATCH_SIZE + 1} raw response:\n{response}\n")
         except Exception as e:
             print(f"Batch failed: {e}")

@@ -29,6 +29,11 @@ MODEL_REASONING = "grok-4.20-0309-reasoning"
 # Daily token usage tracking (in-memory; resets on server restart)
 _token_usage: dict = {"fast_in": 0, "fast_out": 0, "mid_in": 0, "mid_out": 0, "reasoning_in": 0, "reasoning_out": 0}
 
+
+def call_grok(messages, model=MODEL_FAST, max_tokens=400, json_mode=False):
+    """Public wrapper for _call_grok — use when constructing custom messages directly."""
+    return _call_grok(messages, model=model, max_tokens=max_tokens, json_mode=json_mode)
+
 # Cost per 1M tokens (USD) — update when pricing changes
 _COST = {
     MODEL_FAST: {"in": 0.20, "out": 0.20},
@@ -129,9 +134,14 @@ def get_grok_analysis(symbol, context="", use_reasoning=False):
     if not GROK_API_KEY:
         return "Grok API key not configured"
 
-    model = MODEL_REASONING if use_reasoning else MODEL_FAST
-    prompt = f"Analyze {symbol} for options trading. {context}"
-    result = _call_grok([{"role": "user", "content": prompt}], model=model, max_tokens=400)
+    model = MODEL_REASONING if use_reasoning else MODEL_MID
+    system = "You are a professional options trader specializing in the wheel strategy. Be concise and actionable."
+    prompt = f"Analyze {symbol} for options trading." + (f" {context}" if context else "")
+    result = _call_grok(
+        [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        model=model,
+        max_tokens=400,
+    )
     return result or f"Analysis unavailable for {symbol}"
 
 def _read_cache(cache_file: Path, ttl_seconds: int = 3600) -> dict | None:
@@ -231,37 +241,59 @@ def get_grok_opportunity_analysis(symbol, price, strike, dte, premium, delta, iv
     if cached:
         return cached.get("prob", 0.5), cached.get("oneliner", "Cached analysis")
 
-    # Compressed JSON input prompt — both models use same prompt; reasoning model just reasons deeper
+    # Compute derived metrics — give the model pre-calculated values so it reasons on facts, not vibes
+    breakeven = round(strike - premium, 2)
+    otm_pct = round(((price - strike) / price) * 100, 1) if price > 0 else 0
+    ann_return = round((premium / strike) * (365 / max(dte, 1)) * 100, 1) if strike > 0 else 0
+    cushion_pct = round(((price - breakeven) / price) * 100, 1) if price > 0 else 0
+
     system = (
-        "You are a quantitative options analyst. Return ONLY valid JSON, no markdown. "
-        "Schema: {\"prob_profit\": <integer 0-100>, \"thesis\": <string max 15 words>, \"action\": <\"SELL\" or \"SKIP\">}"
+        "You are a quantitative CSP (cash-secured put) analyst. "
+        "Score the probability that this put expires worthless (seller keeps full premium). "
+        "Use this rubric:\n"
+        "- Delta magnitude: |delta| < 0.20 = very safe, 0.20-0.30 = standard, > 0.35 = aggressive\n"
+        "- IV context: high IV (>40%) inflates premiums but signals risk; check RSI for oversold bounce\n"
+        "- DTE: 21-45 days = optimal theta decay; < 14 = gamma risk; > 60 = capital drag\n"
+        "- Trend: uptrend + RSI > 40 favors put sellers; downtrend + RSI < 30 = possible reversal entry\n"
+        "- Cushion: breakeven distance > 10% = strong safety; < 5% = thin margin\n"
+        "Return ONLY valid JSON, no markdown.\n"
+        'Schema: {"prob_otm": <int 0-100>, "ann_return_pct": <float>, '
+        '"risk_flag": <"LOW"|"MEDIUM"|"HIGH">, '
+        '"thesis": <string max 25 words>, "action": <"SELL"|"SKIP">}'
     )
     trade = {
         "sym": symbol, "price": round(price, 2), "strike": round(strike, 2),
         "dte": dte, "premium": round(premium, 2), "delta": round(delta, 3),
         "iv_pct": round(iv, 1), "rsi": round(rsi, 1),
         "vol_surge_x": round(vol_surge, 1), "trend": "up" if in_uptrend else "down",
+        "breakeven": breakeven, "otm_pct": otm_pct,
+        "ann_return_pct": ann_return, "cushion_pct": cushion_pct,
     }
-    user = f"Evaluate this CSP trade: {json.dumps(trade)}"
+    user = f"Evaluate this CSP: {json.dumps(trade)}"
 
     content = _call_grok(
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         model=model,
-        max_tokens=120,
+        max_tokens=150,
         json_mode=True,
     )
 
     try:
         parsed = json.loads(content or "{}")
-        prob = max(0, min(100, int(parsed.get("prob_profit", 50)))) / 100.0
-        oneliner = str(parsed.get("thesis", "")).strip() or f"Score: {int(prob*100)}%"
-        # Prepend action badge
+        prob = max(0, min(100, int(parsed.get("prob_otm", parsed.get("prob_profit", 50))))) / 100.0
+        thesis = str(parsed.get("thesis", "")).strip() or f"Score: {int(prob*100)}%"
         action = parsed.get("action", "")
+        risk = parsed.get("risk_flag", "")
+        # Build informative oneliner: [SELL|HIGH] Thesis text
+        badges = []
         if action:
-            oneliner = f"[{action}] {oneliner}"
+            badges.append(action)
+        if risk:
+            badges.append(risk)
+        prefix = f"[{'|'.join(badges)}] " if badges else ""
+        oneliner = f"{prefix}{thesis}"
     except Exception:
-        # Fallback: try regex on raw content
-        prob_match = re.search(r'"prob_profit"\s*:\s*(\d+)', content or "")
+        prob_match = re.search(r'"prob_otm"\s*:\s*(\d+)', content or "")
         prob = int(prob_match.group(1)) / 100.0 if prob_match else 0.5
         oneliner = "Analysis parsing failed"
 

@@ -186,40 +186,85 @@ def load_sr_cache():
     return {}
 
 def calculate_trade_score(opportunity):
-    """Calculate a trade score for an opportunity"""
+    """
+    Calculate a composite trade score (0-100) blending quantitative heuristics
+    with Grok's AI probability when available.
+
+    Weights:
+      - Grok AI probability:  40 pts  (if available, else heuristics expand)
+      - Premium quality:      15 pts
+      - Delta sweet spot:     15 pts
+      - IV environment:       15 pts
+      - DTE sweet spot:       15 pts
+    """
     try:
-        # Simple scoring based on common factors
-        score = 0
+        score = 0.0
 
-        # Premium score (higher premium = better)
+        # --- Grok AI probability (40% of score when present) ---
+        grok_prob = safe_float(opportunity.get('grok_profit_prob', 0))
+        has_grok = grok_prob > 0
+        if has_grok:
+            # Scale 0-1 probability to 0-40 points
+            score += grok_prob * 40
+
+        # --- Heuristic factors (60 pts with Grok, 100 pts without) ---
+        # If Grok score is missing, heuristic weight expands to fill 100
+        weight = 1.0 if has_grok else (100 / 60)
+
+        # Premium quality (0-15 pts scaled)
         premium = safe_float(opportunity.get('premium', 0))
-        if premium > 5:
-            score += 20
+        strike = safe_float(opportunity.get('strike', 0))
+        if strike > 0 and premium > 0:
+            # Annualized return on capital = (premium/strike) * (365/DTE) * 100
+            dte = max(safe_int(opportunity.get('dte', 30)), 1)
+            ann_return = (premium / strike) * (365 / dte) * 100
+            prem_pts = min(ann_return / 3.0, 15)  # 45%+ annualized = full marks
+        elif premium > 5:
+            prem_pts = 15
         elif premium > 2:
-            score += 10
+            prem_pts = 10
+        else:
+            prem_pts = 5
+        score += prem_pts * weight
 
-        # Delta score (moderate delta preferred for covered calls)
+        # Delta sweet spot (0-15 pts)
         delta = abs(safe_float(opportunity.get('delta', 0)))
-        if 0.2 <= delta <= 0.4:
-            score += 15
-        elif 0.1 <= delta <= 0.6:
-            score += 10
+        if 0.15 <= delta <= 0.30:
+            delta_pts = 15  # ideal CSP range
+        elif 0.10 <= delta <= 0.40:
+            delta_pts = 12
+        elif delta <= 0.50:
+            delta_pts = 8
+        else:
+            delta_pts = 3
+        score += delta_pts * weight
 
-        # IV score (higher IV = more opportunity)
+        # IV environment (0-15 pts)
         iv = safe_float(opportunity.get('iv', 30))
-        if iv > 40:
-            score += 15
+        if iv > 50:
+            iv_pts = 15  # rich premium
+        elif iv > 35:
+            iv_pts = 12
         elif iv > 25:
-            score += 10
+            iv_pts = 9
+        else:
+            iv_pts = 5
+        score += iv_pts * weight
 
-        # DTE score (prefer 30-90 days)
+        # DTE sweet spot (0-15 pts)
         dte = safe_int(opportunity.get('dte', 0))
-        if 30 <= dte <= 90:
-            score += 15
-        elif 15 <= dte <= 120:
-            score += 10
+        if 21 <= dte <= 45:
+            dte_pts = 15  # optimal theta decay
+        elif 14 <= dte <= 60:
+            dte_pts = 12
+        elif 7 <= dte <= 90:
+            dte_pts = 8
+        else:
+            dte_pts = 3
+        score += dte_pts * weight
 
-        return min(score, 100)  # Cap at 100
+        opportunity['trade_score'] = int(min(round(score), 100))
+        return opportunity['trade_score']
 
     except Exception as e:
         print(f"Error calculating trade score: {e}")

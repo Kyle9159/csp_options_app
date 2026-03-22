@@ -17,7 +17,7 @@ from schwab import auth
 import yfinance as yf
 from telegram import Bot as telegram_bot
 
-from grok_utils import get_grok_analysis, get_grok_sentiment_cached
+from grok_utils import call_grok, get_grok_sentiment_cached, MODEL_FAST, MODEL_MID
 from helper_functions import save_cached_leaps
 from schwab_utils import get_client
 
@@ -66,27 +66,21 @@ async def main(force_refresh=False):
     sentiment_emoji = "🚀" if "BULL" in grok_sentiment else "⚠️"
     
     # Step 1: Ask Grok for top 50 LEAPS symbols
-    prompt_symbols = f"""
-        You are an expert long-term investor using LEAPS calls.
-
-        Current date: January 2026
-        Market regime: Strong bull, low volatility
-        Grok sentiment: {grok_sentiment}
-
-        Recommend exactly 30 high-quality stocks/ETFs for buying LEAPS calls (1-2 years out).  Focus on the best current sectors (tech, AI, energy, healthcare), market sentiment/news, company sentiment/quality.
-
-        Prioritize:
-        - Strong fundamentals (growth, dividends, moat)
-        - Stable or upward trend
-        - Reasonable IV (not too high)
-        - Good liquidity in options
-        - Tier 1/2 quality
-
-        Return ONLY a numbered list: 1. AAPL, 2. MSFT, etc. No explanations.
-        """
+    prompt_symbols = (
+        f"Sentiment: {grok_sentiment}\n\n"
+        "Recommend exactly 30 high-quality stocks/ETFs for LEAPS calls (1-2yr out). "
+        "Focus on best current sectors (tech, AI, energy, healthcare), quality, momentum.\n"
+        "Prioritize: strong fundamentals, upward trend, reasonable IV, good options liquidity.\n"
+        "Return ONLY a numbered list: 1. AAPL, 2. MSFT, etc. No explanations."
+    )
 
     print("Asking Grok for top 30 LEAPS symbols...")
-    response = get_grok_analysis(prompt_symbols)
+    response = call_grok(
+        [{"role": "system", "content": "You are an expert long-term investor using LEAPS calls."},
+         {"role": "user", "content": prompt_symbols}],
+        model=MODEL_FAST,
+        max_tokens=300,
+    ) or ""
     
     # Parse symbols
     symbols = []
@@ -229,41 +223,24 @@ async def main(force_refresh=False):
 
 # Step 3: STRICTER PROMPT FOR GROK TO FORCE BETTER OUTPUT
     current_date = datetime.now(ET_TZ).strftime('%B %d, %Y')
-    prompt_ranking = f"""
-        You are an expert LEAPS + Covered Call strategist.
 
-        Current date: {current_date}
-        Market regime: Strong bull / growth favorable
+    system_ranking = (
+        "You are an expert LEAPS + Covered Call strategist. "
+        "Output ONLY the ranked list, no intro, no conclusion."
+    )
 
-        Rank and SCORE the following LEAPS call candidates from BEST to WORST for long-term bullish exposure + some leverage to keep initial capital cost down + covered call income.
-
-        Evaluate on:
-        - Company quality & long-term growth
-        - Delta (higher = better stock replacement)
-        - Depth ITM
-        - DTE (longer = more CC opportunities)
-        - IV level (moderate preferred)
-        - Premium cost vs leverage
-        - Liquidity
-
-        CRITICAL FORMATTING RULES - FOLLOW EXACTLY OR ANALYSIS FAILS:
-        - Output ONLY the ranked list, no intro, no conclusion, no extra text
-        - Every rank MUST have all 4 lines in this exact order:
-        - Score out of 100
-
-        RANK #X: SYMBOL - $STRIKE CALL (DDD DTE)
-        Score: XX/100
-        Reason: One short sentence only
-        Covered Call Idea: Short $Y CALL (30-45 DTE), expected $Z premium
-
-        Example:
-        RANK #1: MSFT - $175 CALL (709 DTE)
-        Score: 95/100
-        Reason: Excellent growth and moderate IV.
-        Covered Call Idea: Short $500 CALL (45 DTE), expected $15 premium
-
-        Rank the top 15 strongest. Provide ALL 15 ranks with the exact format.
-        """
+    prompt_ranking = (
+        f"Date: {current_date} | Market: bull / growth favorable\n\n"
+        "Rank these LEAPS call candidates BEST to WORST for: "
+        "bullish exposure + leverage + covered call income.\n\n"
+        "Evaluate: company quality, delta, ITM depth, DTE, IV, premium cost, liquidity.\n\n"
+        "Format each EXACTLY:\n"
+        "RANK #X: SYMBOL - $STRIKE CALL (DDD DTE)\n"
+        "Score: XX/100\n"
+        "Reason: One short sentence\n"
+        "Covered Call Idea: Short $Y CALL (30-45 DTE), expected $Z premium\n\n"
+        "Rank top 15. ALL 15 must follow the exact format above.\n"
+    )
 
     for i, opp in enumerate(leaps_opps, 1):
         prompt_ranking += f"\n--- CANDIDATE {i} ---\n"
@@ -275,7 +252,12 @@ async def main(force_refresh=False):
         prompt_ranking += f"ITM Depth: {opp['distance_itm_pct']:.1f}%\n"
 
     try:
-        grok_ranking_response = get_grok_analysis(prompt_ranking)
+        grok_ranking_response = call_grok(
+            [{"role": "system", "content": system_ranking},
+             {"role": "user", "content": prompt_ranking}],
+            model=MODEL_MID,
+            max_tokens=900,
+        ) or ""
         print("\n--- GROK RAW OUTPUT ---\n")
         print(grok_ranking_response[:2000])  # Print first part for debugging
         print("\n--- END RAW ---\n")

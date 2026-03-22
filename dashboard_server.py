@@ -436,52 +436,26 @@ def grok_analyze(symbol):
 
     current_date = datetime.now().strftime('%B %d, %Y')
 
-    prompt = f"""
-        Current date: {current_date}
-        Symbol: {symbol}
-        Current price: ${price}
-        Current IV: {iv}%
-        Context: User runs wheel strategy on stocks and LEAPS calls. They want to know if {symbol} is a good candidate for selling cash-secured puts (CSPs) as part of a wheel strategy, and also if there is a strong bullish case for buying LEAPS calls. 
-                 Review the stock and options data and provide a detailed analysis as if you were a best in the business professional options trader.
-        Provide analysis on:
-        - Wheel suitability/LEAPS suitability (keep concise)
-        - Market sentiment, news, recent earnings, events, Key risks (keep concise)
-        - Technical Levels:
-            - Support
-            - Resistance
-            - Moving Averages (9, 50, 200)
-            - RSI
-            - Trend analysis
-        - Optimal CSP suggestion based on current analysis. Format as bullet points. 
-            Suggest:
-            - Current underlying price
-            - Strike
-            - Premium
-            - DTE
-            - Bid-Ask spread
-            - IV %
-            - Delta
-            - Theta
-            - Capital needed per contract
-
-        - Recommend possible LEAPS call options if you think there is a strong bullish case. Strategy would be to sell covered calls on a LEAPS option for more profit potential. 
-            Include: For Bullish or Bearish case (only show based off market conditions) suggest (format as bullet points):
-                     - Current underlying price
-                     - Strike
-                     - Premium
-                     - DTE
-                     - Capital needed per contract
-                     - Dividends? Yes or No.  If Yes, include yield %.
-                     - Strategy on selling the covered calls for this stock (%OTM, DTE, etc).  You can go more in depth here if you want to explain the strategy and how to implement it.  Try not to use too many acronyms.
-        Format the response as:
-        Format as bullet points.
-        Keep under 600 words if needed for strategy of LEAPS).
-        """
+    system = (
+        "You are an elite options trader specializing in the wheel strategy (CSPs + covered calls) "
+        "and LEAPS. Respond in bullet points. Be specific with numbers. Keep under 500 words total."
+    )
+    prompt = (
+        f"Date: {current_date} | {symbol} @ ${price} | IV: {iv}%\n\n"
+        "Analyze for wheel strategy suitability:\n"
+        "1. **Wheel/LEAPS Suitability** — 2-3 bullets\n"
+        "2. **Sentiment & Risks** — recent news, earnings proximity, macro risks (2-3 bullets)\n"
+        "3. **Technical Levels** — support, resistance, 50/200 MA, RSI, trend direction\n"
+        "4. **CSP Suggestion** — recommended strike, DTE range, target delta, estimated premium, "
+        "capital per contract, annualized return %\n"
+        "5. **LEAPS Call** (only if bullish case exists) — strike, DTE, cost, "
+        "covered call overlay strategy (%OTM, DTE for CCs), dividend yield if any\n"
+    )
 
     content = _call_grok(
-        [{"role": "user", "content": prompt}],
+        [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
         model=model,
-        max_tokens=750,
+        max_tokens=650,
     )
     if content:
         return jsonify({"analysis": content, "model_used": model})
@@ -541,46 +515,49 @@ def grok_analyze_option():
 
     current_date = datetime.now().strftime('%B %d, %Y')
 
-    prompt = f"""
-        Current date: {current_date}
-        Underlying: {symbol} @ ${current_price}
-        Trade: {direction} {opt_type} | Strike ${strike} | Premium ${premium} | DTE {dte}
-        {extra_context}
-        """
+    system = "You are an expert options trader. Be direct, data-driven, and actionable. Use bullet points."
+
+    prompt = (
+        f"Date: {current_date} | {symbol} @ ${current_price}\n"
+        f"Trade: {direction} {opt_type} | Strike ${strike} | Premium ${premium} | DTE {dte}\n"
+        f"{extra_context}"
+    )
 
     if delta is not None: prompt += f"Delta: {delta:.3f}\n"
     if theta is not None: prompt += f"Theta: {theta:.3f}\n"
     if vega is not None: prompt += f"Vega: {vega:.3f}\n"
-    if iv is not None: prompt += f"Implied Volatility: {iv:.1f}%\n"
+    if iv is not None: prompt += f"IV: {iv:.1f}%\n"
 
     if strategy == 'CSP':
-        prompt += "\nThis is a Cash-Secured Put (wheel strategy). Focus on:\n"
-        prompt += "- Probability of profit / probability of assignment\n- Downside breakeven and protection\n- Annualized return\n- Risk of early assignment\n- Comparison to simply buying the stock\n"
+        prompt += (
+            "\nCSP (wheel strategy). Focus on: probability of profit, "
+            "downside breakeven/protection, annualized return, assignment risk, vs buying stock outright.\n"
+        )
     elif strategy == 'LEAPS':
-        prompt += "\nThis is a LEAPS long call (stock replacement). Focus on:\n"
-        prompt += "- Effective leverage vs buying shares outright\n- Delta exposure and cost basis\n- Time decay risk over long horizon\n- Breakeven and max loss\n"
+        prompt += (
+            "\nLEAPS long call (stock replacement). Focus on: leverage vs shares, "
+            "delta exposure, time decay risk, breakeven, max loss.\n"
+        )
     elif strategy == 'CC':
-        prompt += "\nThis is a Covered Call. Focus on:\n"
-        prompt += "- Income vs upside cap\n- Probability of being called away\n- If-called vs if-not-called scenarios\n"
+        prompt += (
+            "\nCovered Call. Focus on: income vs upside cap, "
+            "probability of being called away, if-called vs if-not-called scenarios.\n"
+        )
     else:
         prompt += f"\nGeneral analysis of {direction.lower()}ing a {opt_type.lower()} option.\n"
 
-    prompt += """
-        Provide a concise, actionable analysis in bullet points:
-        • Trade summary
-        • Estimated probability of profit 
-        • Breakeven point(s)
-        • Expected return per contract / annualized (if applicable)
-        • Key risks
-        • Comparison to alternatives
-        • Final recommendation: Strong Yes, Yes, Neutral, Caution, No
-        Keep total response under 400 words.
-        """
+    prompt += (
+        "\nProvide concise bullet-point analysis:\n"
+        "- Trade summary\n- Estimated probability of profit\n- Breakeven\n"
+        "- Expected return / annualized\n- Key risks\n- Alternatives\n"
+        "- Final verdict: Strong Yes / Yes / Neutral / Caution / No\n"
+        "Keep under 350 words."
+    )
 
     content = _call_grok(
-        [{"role": "user", "content": prompt}],
+        [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
         model=model,
-        max_tokens=500,
+        max_tokens=450,
     )
     if content:
         return jsonify({"analysis": content.strip(), "model_used": model})
@@ -612,47 +589,35 @@ def grok_trade_analysis():
             iv_entry = t.get('IV at Entry', 'N/A')
             rsi_entry = t.get('RSI at Entry', 'N/A')
 
-            trades_text += f"""
-                Trade #{i}: {symbol} ${strike:.2f}P exp {exp_str}
-                Entry: ${entry_prem:.2f} | Exit: ${exit_prem:.2f} | Held: {days_held} days
-                P/L: ${pl:+,.0f} | Result: {'WIN' if pl > 0 else 'LOSS' if pl < 0 else 'BE'}
-                IV: {iv_entry} | RSI: {rsi_entry}
-                """
+            trades_text += (
+                f"#{i}: {symbol} ${strike:.2f}P exp {exp_str} | "
+                f"Entry ${entry_prem:.2f} → Exit ${exit_prem:.2f} | "
+                f"{days_held}d | P/L ${pl:+,.0f} {'WIN' if pl > 0 else 'LOSS' if pl < 0 else 'BE'} | "
+                f"IV {iv_entry} RSI {rsi_entry}\n"
+            )
 
-        prompt = f"""
-            You are an elite wheel strategy analyst reviewing my closed CSP trades.
+        system = (
+            "You are an elite wheel strategy analyst. "
+            "Analyze closed CSP trades and identify patterns. "
+            "Use Markdown tables with | separators. Be data-driven."
+        )
 
-            Here are my last {len(closed_trades)} closed trades:
+        prompt = (
+            f"My last {len(closed_trades)} closed CSP trades:\n\n"
+            f"{trades_text}\n"
+            "Analyze and report:\n"
+            "1. **Overall Performance** — win rate, total P/L, avg P/L, best/worst\n"
+            "2. **Patterns** — by DTE range (0-10/11-21/22-45/45+), IV (high/mid/low), RSI, sector\n"
+            "3. **Best Setups** — highest win rate combos, highest ROI patterns\n"
+            "4. **Recommendations** — my winning DNA, setups to target, risks to avoid\n\n"
+            "Use proper Markdown tables. Keep under 500 words."
+        )
 
-            {trades_text}
-
-            Analyze and report in clean Markdown with proper tables:
-
-            1. Overall Performance
-            - Win rate, total P/L, avg P/L, best/worst trade
-
-            2. Patterns by Category
-            - DTE at entry ranges (0-10, 11-21, 22-45, 45+)
-            - IV at entry (high >50%, medium 30-50%, low <30%)
-            - RSI at entry (low <40, mid 40-60, high >60)
-            - Sector/ticker groups
-
-            3. Best Setups
-            - Highest win rate combinations
-            - Highest ROI patterns
-            - Most consistent performers
-
-            4. Future Recommendations
-            - My personal "winning DNA"
-            - Specific setups to target
-            - Risks/patterns to avoid
-
-            Use **proper Markdown tables** (with | separators and header row).
-            Be direct, data-driven, and actionable.
-            Keep under 600 words.
-            """
-
-        analysis = get_grok_analysis(prompt)
+        analysis = _call_grok(
+            [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            model=MODEL_MID,
+            max_tokens=700,
+        )
 
         # Clean up any malformed table lines from Grok
         lines = analysis.split('\n')
@@ -693,29 +658,65 @@ def calculate_cc_live():
 
 @app.post("/csp/suggest_roll")
 def suggest_roll():
-    # data = asyncio.run(request.json())
-    # symbol = data.get('Symbol', '').upper().strip()
-    # strike = data.get('Strike')
-    # exp_date = data.get('Exp_Date')
     try:
-        # Load closed trades
         trades_result = load_trades_from_sheet()
         if trades_result is None:
             return jsonify([])
-        
-        df, _ = trades_result  # Unpack — we only need df here
+
+        df, _ = trades_result
         if df is None or df.empty:
             return jsonify([])
-    
+
+        system = (
+            "You are a wheel strategy specialist. Suggest optimal CSP roll parameters. "
+            "Be specific with numbers. Keep each suggestion under 100 words."
+        )
+
+        suggestions = []
         for _, row in df.iterrows():
             symbol = row['Symbol']
-            strike = row['Strike']
-            exp_date = row['Exp Date']  # Assume format 'MM/DD/YYYY'
+            strike = safe_float(row.get('Strike', 0))
+            exp_date = row.get('Exp Date', '')
+            entry_premium = safe_float(row.get('Entry Premium', 0))
 
-        prompt = f"Suggest optimal roll for current {symbol} CSP position based on performance of current CSP option in {symbol} at {strike} strike price, and {exp_date} expiration date. Include new strike, DTE, expected credit."
-        suggestion = get_grok_analysis(prompt)
-        result = {"suggestion": suggestion}
-        return result
+            # Fetch current underlying price
+            try:
+                tk = yf.Ticker(symbol)
+                underlying = tk.info.get('regularMarketPrice') or tk.info.get('previousClose', 0)
+            except Exception:
+                underlying = 0
+
+            # Calculate DTE remaining
+            dte = 0
+            try:
+                exp_dt = datetime.strptime(str(exp_date).strip(), '%m/%d/%Y')
+                dte = max((exp_dt.date() - datetime.now().date()).days, 0)
+            except Exception:
+                pass
+
+            prompt = (
+                f"{symbol} @ ${underlying:.2f} | Short ${strike:.2f}P exp {exp_date} | "
+                f"DTE {dte} | Entry credit ${entry_premium:.2f}\n\n"
+                "Should I roll this position? If yes:\n"
+                "- New strike & expiration (DTE)\n"
+                "- Expected net credit/debit\n"
+                "- Reasoning (delta improvement, more time, better premium capture)\n"
+                "If no: why hold or close instead."
+            )
+
+            suggestion = _call_grok(
+                [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                model=MODEL_MID,
+                max_tokens=200,
+            )
+            suggestions.append({
+                "symbol": symbol,
+                "strike": strike,
+                "exp_date": exp_date,
+                "suggestion": suggestion or "Analysis unavailable"
+            })
+
+        return jsonify(suggestions)
     except Exception as e:
         return {"result": f"Rollover Analysis Failed: {str(e)}"}
     
@@ -795,28 +796,31 @@ def get_trading_dna():
             pl = safe_float(t.get('Net Profit $', 0))
             days = safe_int(t.get('Days Held', 0))
             result = "WIN" if pl > 0 else "LOSS" if pl < 0 else "BE"
-            trades_summary += f"{i}. {symbol} ${strike:.0f}P | Held {days}d | P/L ${pl:+,.0f} | {result}\n"
+            trades_summary += f"{i}. {symbol} ${strike:.0f}P | {days}d | ${pl:+,.0f} | {result}\n"
 
-        prompt = f"""
-            You are an elite wheel trading coach analyzing my closed trades to discover my personal "Trading DNA".
+        system = (
+            "You are an elite wheel trading coach. "
+            "Identify personal trading patterns and winning DNA from trade history. "
+            "Be specific and actionable. Use bullets."
+        )
 
-            My last {len(closed_trades)} closed trades:
+        prompt = (
+            f"My last {len(closed_trades)} closed CSP trades:\n\n"
+            f"{trades_summary}\n"
+            "Identify my winning patterns:\n"
+            "- Highest win rate DTE ranges\n"
+            "- Best delta/IV/RSI conditions\n"
+            "- Top performing sectors/tickers\n"
+            "- Most profitable setup combinations\n"
+            "- Specific recommendations for future trades\n\n"
+            "Keep under 300 words."
+        )
 
-            {trades_summary}
-
-            Identify my winning patterns:
-            • Highest win rate DTE ranges
-            • Best delta/IV/RSI conditions
-            • Top performing sectors/tickers
-            • Most profitable setup combinations
-            • Specific recommendations for future trades
-
-            Be direct, actionable, and specific.
-            Use bullets.
-            Keep under 300 words.
-            """
-
-        analysis = get_grok_analysis(prompt)
+        analysis = _call_grok(
+            [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            model=MODEL_MID,
+            max_tokens=400,
+        )
 
         # Final fallback
         if not analysis or "unavailable" in analysis.lower() or len(analysis.strip()) < 10:
@@ -943,24 +947,20 @@ def update_csp_insight():
         progress_pct = (profit_captured / entry_premium * 100) if entry_premium > 0 else 0
         
         # Build updated prompt focused on revisions/updates
-        grok_prompt = f"""
-        Update strategy for open Short {symbol} ${strike:.2f} PUT exp {exp}
-        
-        Entry credit: ${entry_premium:.2f}, Current mark: ${mark:.2f} ({progress_pct:.1f}% profit captured)
-        
-        DTE: {dte}, Days open: {days_open}
-        
-        Underlying: ${underlying:.2f}, Delta: {delta:.2f}, IV: {iv:.1f}%
-        
-        P/L: ${pl_dollars:,.0f}
-        
-        Provide revised advice: Any updates to original plan based on latest data? 
-        Should I close early, hold to expiration, roll out/up/down? New risks or opportunities?
-        
-        Keep concise, under 80 words. Be actionable.
-        """
-        
-        analysis = get_grok_analysis(grok_prompt)
+        system = "You are a wheel strategy position manager. Be concise and actionable."
+        grok_prompt = (
+            f"Open short {symbol} ${strike:.2f}P exp {exp}\n"
+            f"Entry ${entry_premium:.2f} → Mark ${mark:.2f} ({progress_pct:.1f}% captured) | "
+            f"DTE {dte} | {days_open}d open\n"
+            f"Underlying ${underlying:.2f} | Delta {delta:.2f} | IV {iv:.1f}% | P/L ${pl_dollars:+,.0f}\n\n"
+            "Action advice: close early, hold, or roll (out/up/down)? New risks? Under 80 words."
+        )
+
+        analysis = _call_grok(
+            [{"role": "system", "content": system}, {"role": "user", "content": grok_prompt}],
+            model=MODEL_FAST,
+            max_tokens=150,
+        )
         timestamp = datetime.now(ET_TZ).strftime("%I:%M %p ET")
         analysis_with_time = f"[{timestamp}] {analysis}"
         
@@ -983,33 +983,29 @@ def refresh_levels(symbol):
 def get_market_pulse():
     current_date = datetime.now(ET_TZ).strftime('%B %d, %Y')
     try:
-        # Load your watchlist symbols for recommendations
         from simple_options_scanner import SIMPLE_WATCHLIST
 
-        # Build prompt for market pulse - make it work with get_grok_analysis prepend
-        context_prompt = f"""
-        Current date: {current_date}
-        Market context: Provide overall market pulse and sentiment analysis.
+        system = (
+            "You are a market strategist for wheel strategy (CSP + CC) traders. "
+            "Be concise and actionable. Use the headers provided."
+        )
 
-        Available watchlist symbols: {', '.join(sorted(set(SIMPLE_WATCHLIST)))}
+        prompt = (
+            f"Date: {current_date}\n"
+            f"Watchlist: {', '.join(sorted(set(SIMPLE_WATCHLIST)))}\n\n"
+            "Market pulse for CSP/wheel traders:\n"
+            "**Overall Sentiment** — bullish/bearish/neutral, VIX context\n"
+            "**Strongest Sectors** — 2-3 sectors with momentum\n"
+            "**Best Wheel Picks** — top 5 from watchlist (strong sectors, good IV)\n"
+            "**Quick Advice** — actionable entry guidance\n\n"
+            "Keep under 300 words."
+        )
 
-        Please provide a concise market pulse covering:
-        - Overall market sentiment (bullish/bearish/neutral)
-        - Strongest sectors right now
-        - Top 5 wheel strategy picks from the watchlist above (focus on strong sectors)
-        - Quick actionable advice/recommendations
-
-        Format your response with these headers:
-        **Overall Sentiment**
-        **Strongest Sectors**
-        **Best Wheel Picks**
-        **Quick Advice**
-
-        Keep under 350 words. Be actionable and specific.
-        """
-
-        # Call Grok analysis with SPY as the symbol and market pulse context
-        analysis = get_grok_analysis(symbol="SPY", context=context_prompt)
+        analysis = _call_grok(
+            [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            model=MODEL_MID,
+            max_tokens=400,
+        )
 
         if not analysis:
             analysis = "Market pulse unavailable — try again soon."

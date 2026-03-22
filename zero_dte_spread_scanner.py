@@ -11,7 +11,7 @@ from datetime import datetime, date
 import pytz
 import yfinance as yf
 from schwab.client import Client
-from grok_utils import get_grok_analysis, get_grok_0dte_recommendation
+from grok_utils import call_grok, get_grok_0dte_recommendation, MODEL_FAST
 from schwab_utils import get_client
 from helper_functions import safe_float
 
@@ -206,15 +206,19 @@ async def scan_0dte_spreads():
 
     # Grok analysis on top 10
     for opp in opportunities[:10]:
-        prompt = f"""
-        Analyze this 0DTE {opp['symbol']} iron condor today:
-        Underlying ~${opp['underlying_price']}.
-        Legs: {opp['short_put']}/{opp['long_put']} put spread + {opp['short_call']}/{opp['long_call']} call spread.
-        Credit ${opp['total_credit']}, max risk ${opp['max_risk_per_contract']}.
-        Approx prob {opp['prob_approx']}%.
-        Good entry? Management tips? Risk highlights? Keep under 70 words.
-        """
-        opp['grok_analysis'] = get_grok_analysis(prompt)
+        prompt = (
+            f"0DTE {opp['symbol']} iron condor | ${opp['underlying_price']:.0f} | "
+            f"Legs: {opp['short_put']}/{opp['long_put']}P + {opp['short_call']}/{opp['long_call']}C | "
+            f"Credit ${opp['total_credit']:.2f} max risk ${opp['max_risk_per_contract']:.0f} | "
+            f"~{opp['prob_approx']:.0f}% prob\n"
+            "Good entry? Management tips? Risks? Under 70 words."
+        )
+        opp['grok_analysis'] = call_grok(
+            [{"role": "system", "content": "You are a 0DTE spreads specialist. Be concise."},
+             {"role": "user", "content": prompt}],
+            model=MODEL_FAST,
+            max_tokens=120,
+        ) or "Analysis unavailable"
 
         # Get Grok's recommendation for which side to favor
         put_credit = opp['total_credit'] * 0.4  # Approximate split

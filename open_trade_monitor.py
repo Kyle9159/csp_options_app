@@ -30,7 +30,7 @@ import re
 from dotenv import load_dotenv
 from pathlib import Path
 
-from grok_utils import get_grok_analysis
+from grok_utils import call_grok, MODEL_FAST
 from schwab_utils import get_client
 
 from helper_functions import safe_date, safe_date_update, safe_float, safe_int
@@ -375,16 +375,19 @@ def enrich_trade_with_live_data(row, quote_data):
         risk = "Moderate"
 
     # Grok prompt (uses current_mark which now includes fallback)
-    grok_prompt = f"""
-    Short {ticker} ${strike:.2f} {'PUT' if is_put else 'CALL'} exp {exp_date}
-    Entry credit: ${entry_premium:.2f}, Current: ${current_mark:.2f} ({progress_pct:.1f}% to 50%)
-    DTE: {dte}, Days open: {days_open}
-    Underlying: ${underlying_price:.2f}, Delta: {delta:.2f}, IV: {iv:.1f}%, Theta: {raw_theta:.2f}
-    P/L: ${pl_dollars:,.0f}
-    Advise: Close early? Hold? Roll? Risks?
-    Keep under 80 words.
-    """
-    grok_analysis = get_grok_analysis(grok_prompt)
+    grok_prompt = (
+        f"Short {ticker} ${strike:.2f} {'PUT' if is_put else 'CALL'} exp {exp_date} | "
+        f"Entry ${entry_premium:.2f} → ${current_mark:.2f} ({progress_pct:.1f}% to 50%) | "
+        f"DTE {dte} {days_open}d open | ${underlying_price:.2f} | "
+        f"Delta {delta:.2f} IV {iv:.1f}% Theta {raw_theta:.2f} | P/L ${pl_dollars:,.0f}\n"
+        "Advise: Close/Hold/Roll? Risks? Under 80 words."
+    )
+    grok_analysis = call_grok(
+        [{"role": "system", "content": "You are a wheel strategy position manager. Be concise."},
+         {"role": "user", "content": grok_prompt}],
+        model=MODEL_FAST,
+        max_tokens=150,
+    ) or "Analysis unavailable"
 
     # Update row
     row.update({

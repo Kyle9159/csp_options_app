@@ -35,7 +35,8 @@ GROK_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 
 # Bot imports
 from grok_utils import get_grok_opportunity_analysis
-from open_trade_monitor import load_trades_from_sheet, enrich_trade_with_live_data, get_live_quotes_concurrent, parse_option_symbol, get_grok_analysis
+from open_trade_monitor import load_trades_from_sheet, enrich_trade_with_live_data, get_live_quotes_concurrent, parse_option_symbol
+from grok_utils import call_grok, MODEL_FAST
 from covered_call_bot import get_current_positions, find_covered_calls
 from dividend_tracker_bot import generate_dividend_report
 from simple_options_scanner import main as run_simple_scanner
@@ -622,16 +623,19 @@ async def run_all_bots():
 
             # === Full Grok Analysis (Optional — Only if Missing) ===
             if not trade.get('grok_analysis'):
-                prompt = f"""
-                Short {symbol} ${strike:.2f}P exp {trade.get('Exp Date', 'N/A')}
-                Entry: ${entry_premium:.2f} → Mark: ${current_mark:.2f} ({progress_pct:.1f}% progress)
-                DTE: {dte} | Underlying: ${underlying_price:.2f}
-                Delta: {abs(delta):.2f} | IV: {iv:.1f}%
-                P/L: ${pl_dollars:+.0f}
-                Advise: Close/Hold/Roll? Key risks?
-                Keep under 80 words.
-                """
-                trade['grok_analysis'] = get_grok_analysis(prompt)
+                prompt = (
+                    f"Short {symbol} ${strike:.2f}P exp {trade.get('Exp Date', 'N/A')} | "
+                    f"Entry ${entry_premium:.2f} → Mark ${current_mark:.2f} ({progress_pct:.1f}%) | "
+                    f"DTE {dte} | ${underlying_price:.2f} | Delta {abs(delta):.2f} IV {iv:.1f}% | "
+                    f"P/L ${pl_dollars:+.0f}\n"
+                    "Advise: Close/Hold/Roll? Key risks? Under 80 words."
+                )
+                trade['grok_analysis'] = call_grok(
+                    [{"role": "system", "content": "You are a wheel strategy position manager. Be concise."},
+                     {"role": "user", "content": prompt}],
+                    model=MODEL_FAST,
+                    max_tokens=150,
+                )
 
         pbar.update(1)
 
