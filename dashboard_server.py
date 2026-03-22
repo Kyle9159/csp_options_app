@@ -31,6 +31,7 @@ from grok_utils import (
     get_daily_token_cost,
     _call_grok,
     MODEL_FAST,
+    MODEL_MID,
     MODEL_REASONING,
 )
 from open_trade_monitor import load_trades_from_sheet, update_sheet_with_live_data, get_sheet
@@ -411,9 +412,13 @@ def grok_analyze(symbol):
     if not XAI_API_KEY:
         return jsonify({"error": "XAI API key not set"})
 
-    # ?reasoning=true enables the expensive model — only when user explicitly requests deep analysis
-    use_reasoning = request.args.get("reasoning", "false").lower() == "true"
-    model = MODEL_REASONING if use_reasoning else MODEL_FAST
+    # Model selection: ?reasoning=true for full reasoning, default=mid-tier quality, ?fast=true for cheap
+    if request.args.get("reasoning", "false").lower() == "true":
+        model = MODEL_REASONING
+    elif request.args.get("fast", "false").lower() == "true":
+        model = MODEL_FAST
+    else:
+        model = MODEL_MID  # user-facing prose — quality without reasoning overhead
 
     # Get current price/IV for context
     try:
@@ -490,9 +495,13 @@ def grok_analyze_option():
 
     data = request.get_json()
 
-    # ?reasoning=true in body or query param enables expensive model
-    use_reasoning = data.get("reasoning", False) or request.args.get("reasoning", "false").lower() == "true"
-    model = MODEL_REASONING if use_reasoning else MODEL_FAST
+    # Model selection: reasoning=true for full reasoning, fast=true for cheap, default=mid-tier
+    if data.get("reasoning", False) or request.args.get("reasoning", "false").lower() == "true":
+        model = MODEL_REASONING
+    elif data.get("fast", False) or request.args.get("fast", "false").lower() == "true":
+        model = MODEL_FAST
+    else:
+        model = MODEL_MID
 
     symbol = data.get('symbol', '').upper()
     opt_type = data.get('type', 'Put')          # Put or Call

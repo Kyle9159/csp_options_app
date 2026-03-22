@@ -2,10 +2,13 @@ import os
 import requests
 import json
 import hashlib
+import logging
 import time
 import re
 from datetime import date
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Grok API configuration
 GROK_API_KEY = os.getenv('XAI_API_KEY')
@@ -15,52 +18,67 @@ GROK_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 CACHE_DIR = Path("cache_files")
 CACHE_DIR.mkdir(exist_ok=True)
 
-# Model tiers
-# FAST: bulk filtering, sentiment, background scanner — $0.20/1M tokens
-# REASONING: final trade picks, on-demand deep analysis — $2.00/1M tokens (10x)
-MODEL_FAST = "grok-3-mini-fast"
-MODEL_REASONING = "grok-3"  # upgrade to grok-4.2 when available on xAI API
+# Model tiers — update these when xAI releases new models
+# FAST: bulk filtering, sentiment, background scanner — cheapest
+# MID: user-facing prose generation (detailed analysis tiles) — mid-cost, no reasoning overhead
+# REASONING: final trade picks, deep quantitative analysis on demand — most expensive
+MODEL_FAST = "grok-4-1-fast-reasoning"
+MODEL_MID = "grok-4.20-0309-non-reasoning"
+MODEL_REASONING = "grok-4.20-0309-reasoning"
 
 # Daily token usage tracking (in-memory; resets on server restart)
-_token_usage: dict = {"fast_in": 0, "fast_out": 0, "reasoning_in": 0, "reasoning_out": 0}
+_token_usage: dict = {"fast_in": 0, "fast_out": 0, "mid_in": 0, "mid_out": 0, "reasoning_in": 0, "reasoning_out": 0}
 
-# Cost per 1M tokens (USD)
-_COST = {MODEL_FAST: {"in": 0.20, "out": 0.20}, MODEL_REASONING: {"in": 2.00, "out": 2.00}}
+# Cost per 1M tokens (USD) — update when pricing changes
+_COST = {
+    MODEL_FAST: {"in": 0.20, "out": 0.20},
+    MODEL_MID: {"in": 2.00, "out": 2.00},
+    MODEL_REASONING: {"in": 2.00, "out": 2.00},
+}
+
+
+def _tier_key(model: str) -> str:
+    """Map model name to token tracking bucket."""
+    if model == MODEL_FAST:
+        return "fast"
+    if model == MODEL_MID:
+        return "mid"
+    return "reasoning"
 
 
 def _log_usage(model: str, usage: dict) -> None:
     """Track token consumption and log estimated cost."""
     prompt_tokens = usage.get("prompt_tokens", 0)
     completion_tokens = usage.get("completion_tokens", 0)
-    if model == MODEL_FAST:
-        _token_usage["fast_in"] += prompt_tokens
-        _token_usage["fast_out"] += completion_tokens
-    else:
-        _token_usage["reasoning_in"] += prompt_tokens
-        _token_usage["reasoning_out"] += completion_tokens
+    tier = _tier_key(model)
+    _token_usage[f"{tier}_in"] += prompt_tokens
+    _token_usage[f"{tier}_out"] += completion_tokens
     cost = (
         prompt_tokens / 1_000_000 * _COST.get(model, {}).get("in", 0)
         + completion_tokens / 1_000_000 * _COST.get(model, {}).get("out", 0)
     )
-    print(f"[GROK cost] model={model} in={prompt_tokens} out={completion_tokens} call_cost=${cost:.5f}")
+    logger.info(f"[GROK cost] model={model} in={prompt_tokens} out={completion_tokens} call_cost=${cost:.5f}")
 
 
 def get_daily_token_cost() -> dict:
     """Return accumulated token usage and estimated daily cost."""
-    fast_cost = (
-        _token_usage["fast_in"] / 1_000_000 * _COST[MODEL_FAST]["in"]
-        + _token_usage["fast_out"] / 1_000_000 * _COST[MODEL_FAST]["out"]
-    )
-    reasoning_cost = (
-        _token_usage["reasoning_in"] / 1_000_000 * _COST[MODEL_REASONING]["in"]
-        + _token_usage["reasoning_out"] / 1_000_000 * _COST[MODEL_REASONING]["out"]
-    )
+    def _tier_cost(tier: str, model: str) -> float:
+        return (
+            _token_usage[f"{tier}_in"] / 1_000_000 * _COST[model]["in"]
+            + _token_usage[f"{tier}_out"] / 1_000_000 * _COST[model]["out"]
+        )
+
+    fast_cost = _tier_cost("fast", MODEL_FAST)
+    mid_cost = _tier_cost("mid", MODEL_MID)
+    reasoning_cost = _tier_cost("reasoning", MODEL_REASONING)
     return {
         "fast_tokens": _token_usage["fast_in"] + _token_usage["fast_out"],
+        "mid_tokens": _token_usage["mid_in"] + _token_usage["mid_out"],
         "reasoning_tokens": _token_usage["reasoning_in"] + _token_usage["reasoning_out"],
         "fast_cost_usd": round(fast_cost, 4),
+        "mid_cost_usd": round(mid_cost, 4),
         "reasoning_cost_usd": round(reasoning_cost, 4),
-        "total_cost_usd": round(fast_cost + reasoning_cost, 4),
+        "total_cost_usd": round(fast_cost + mid_cost + reasoning_cost, 4),
     }
 
 
@@ -80,12 +98,15 @@ def _call_grok(messages: list, model: str = MODEL_FAST, max_tokens: int = 300, j
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
 
+    # Reasoning model may need more time to think
+    timeout = 60 if model == MODEL_REASONING else 30
+
     try:
         response = requests.post(
             GROK_ENDPOINT,
             headers={"Authorization": f"Bearer {GROK_API_KEY}", "Content-Type": "application/json"},
             json=payload,
-            timeout=30,
+            timeout=timeout,
         )
         if response.status_code == 200:
             data = response.json()
@@ -93,10 +114,10 @@ def _call_grok(messages: list, model: str = MODEL_FAST, max_tokens: int = 300, j
                 _log_usage(model, data["usage"])
             return data["choices"][0]["message"]["content"]
         else:
-            print(f"[GROK error] status={response.status_code} body={response.text[:200]}")
+            logger.error(f"[GROK error] status={response.status_code} body={response.text[:200]}")
             return None
     except Exception as e:
-        print(f"[GROK error] {e}")
+        logger.error(f"[GROK error] {e}")
         return None
 
 
@@ -129,9 +150,9 @@ def _read_cache(cache_file: Path, ttl_seconds: int = 3600) -> dict | None:
 
 def _write_cache(cache_file: Path, data: dict) -> None:
     try:
-        data["timestamp"] = time.time()
+        record = {**data, "timestamp": time.time()}
         with open(cache_file, "w") as f:
-            json.dump(data, f)
+            json.dump(record, f)
     except Exception:
         pass
 
@@ -330,7 +351,8 @@ def get_grok_0dte_recommendation(symbol, underlying_price, short_put, short_call
     ).hexdigest()
     cache_file = CACHE_DIR / f"grok_0dte_{cache_key}.json"
 
-    cached = _read_cache(cache_file, ttl_seconds=86400)
+    # 0DTE is intraday-sensitive — 30 min cache, not full day
+    cached = _read_cache(cache_file, ttl_seconds=1800)
     if cached:
         return {
             "recommendation": cached.get("recommendation", "NEUTRAL"),
