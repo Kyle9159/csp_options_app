@@ -25,7 +25,14 @@ dotenv.load_dotenv()
 from covered_call_bot import main as cc_main
 from dividend_tracker_bot import main as div_main
 import simple_options_scanner
-from grok_utils import get_grok_sentiment_cached as get_grok_sentiment, get_grok_analysis
+from grok_utils import (
+    get_grok_sentiment_cached as get_grok_sentiment,
+    get_grok_analysis,
+    get_daily_token_cost,
+    _call_grok,
+    MODEL_FAST,
+    MODEL_REASONING,
+)
 from open_trade_monitor import load_trades_from_sheet, update_sheet_with_live_data, get_sheet
 from helper_functions import safe_float, safe_int, safe_date
 # import leaps_scanner  # Not critical for dashboard
@@ -404,12 +411,15 @@ def grok_analyze(symbol):
     if not XAI_API_KEY:
         return jsonify({"error": "XAI API key not set"})
 
+    # ?reasoning=true enables the expensive model — only when user explicitly requests deep analysis
+    use_reasoning = request.args.get("reasoning", "false").lower() == "true"
+    model = MODEL_REASONING if use_reasoning else MODEL_FAST
+
     # Get current price/IV for context
     try:
         tk = yf.Ticker(symbol)
         info = tk.info
         price = info.get('regularMarketPrice') or info.get('previousClose', 'N/A')
-        # Rough IV estimate from first option chain date
         options = tk.options
         iv = 'N/A'
         if options:
@@ -463,21 +473,14 @@ def grok_analyze(symbol):
         Keep under 600 words if needed for strategy of LEAPS).
         """
 
-    headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": "grok-4-1-fast-reasoning",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.5,
-        "max_tokens": 750
-    }
-
-    try:
-        resp = requests.post(GROK_ENDPOINT, headers=headers, json=payload, timeout=30)
-        resp.raise_for_status()
-        content = resp.json()['choices'][0]['message']['content']
-        return jsonify({"analysis": content})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    content = _call_grok(
+        [{"role": "user", "content": prompt}],
+        model=model,
+        max_tokens=750,
+    )
+    if content:
+        return jsonify({"analysis": content, "model_used": model})
+    return jsonify({"error": "Grok API unavailable"})
 
 
 @app.route('/grok/analyze_option', methods=['POST'])
@@ -486,6 +489,10 @@ def grok_analyze_option():
         return jsonify({"error": "XAI API key not configured"})
 
     data = request.get_json()
+
+    # ?reasoning=true in body or query param enables expensive model
+    use_reasoning = data.get("reasoning", False) or request.args.get("reasoning", "false").lower() == "true"
+    model = MODEL_REASONING if use_reasoning else MODEL_FAST
 
     symbol = data.get('symbol', '').upper()
     opt_type = data.get('type', 'Put')          # Put or Call
@@ -504,7 +511,7 @@ def grok_analyze_option():
         tk = yf.Ticker(symbol)
         info = tk.info
         current_price = info.get('regularMarketPrice') or info.get('previousClose') or 'N/A'
-    except:
+    except Exception:
         current_price = 'N/A'
 
     # Calculate useful derived metrics for the prompt
@@ -537,7 +544,6 @@ def grok_analyze_option():
     if vega is not None: prompt += f"Vega: {vega:.3f}\n"
     if iv is not None: prompt += f"Implied Volatility: {iv:.1f}%\n"
 
-    # Strategy-specific instructions
     if strategy == 'CSP':
         prompt += "\nThis is a Cash-Secured Put (wheel strategy). Focus on:\n"
         prompt += "- Probability of profit / probability of assignment\n- Downside breakeven and protection\n- Annualized return\n- Risk of early assignment\n- Comparison to simply buying the stock\n"
@@ -562,25 +568,15 @@ def grok_analyze_option():
         Keep total response under 400 words.
         """
 
-    headers = {
-        "Authorization": f"Bearer {XAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "grok-4-1-fast-reasoning",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.4,
-        "max_tokens": 500
-    }
+    content = _call_grok(
+        [{"role": "user", "content": prompt}],
+        model=model,
+        max_tokens=500,
+    )
+    if content:
+        return jsonify({"analysis": content.strip(), "model_used": model})
+    return jsonify({"error": "Grok API error"})
 
-    try:
-        resp = requests.post(GROK_ENDPOINT, headers=headers, json=payload, timeout=40)
-        resp.raise_for_status()
-        content = resp.json()['choices'][0]['message']['content'].strip()
-        return jsonify({"analysis": content})
-    except Exception as e:
-        return jsonify({"error": f"Grok API error: {str(e)}"})
-    
 @app.route('/grok/trade_analysis', methods=['POST'])
 def grok_trade_analysis():
     try:
@@ -2854,6 +2850,12 @@ def get_trade_scores_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/grok/cost')
+def grok_cost():
+    """Return in-process Grok token usage and estimated cost since last server restart."""
+    return jsonify(get_daily_token_cost())
+
+
 @app.route('/api/grok_compare', methods=['POST'])
 def grok_compare_opportunities():
     """
@@ -2910,32 +2912,23 @@ Provide a detailed comparison explaining:
 Be specific about delta, RSI, distance, and capital efficiency. Keep it under 200 words."""
 
         # Call Grok API
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {XAI_API_KEY}"
-        }
-
-        payload = {
-            "messages": [
+        comparison = _call_grok(
+            [
                 {"role": "system", "content": "You are a quantitative options trading analyst specializing in cash-secured put strategies."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
-            "model": "grok-4-1-fast-reasoning",
-            "stream": False,
-            "temperature": 0.7
-        }
+            model=MODEL_FAST,
+            max_tokens=300,
+        )
 
-        response = requests.post(GROK_ENDPOINT, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-
-        grok_data = response.json()
-        comparison = grok_data['choices'][0]['message']['content'].strip()
+        if not comparison:
+            return jsonify({"success": False, "error": "Grok API unavailable"}), 502
 
         logger.info(f"Grok comparison completed: {len(comparison)} chars")
 
         return jsonify({
             'success': True,
-            'comparison': comparison
+            'comparison': comparison.strip()
         })
 
     except requests.exceptions.Timeout:
