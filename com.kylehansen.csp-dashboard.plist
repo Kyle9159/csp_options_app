@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kylehansen.csp-dashboard</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/kylehansen/repos/csp_options_app/.venv/bin/python3.14</string>
+    <string>/Users/kylehansen/repos/csp_options_app/dashboard_server.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/kylehansen/repos/csp_options_app</string>
+
+  <!-- Start automatically on login -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart if it crashes -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Log output -->
+  <key>StandardOutPath</key>
+  <string>/tmp/csp-dashboard.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/csp-dashboard.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/kylehansen</string>
+    <key>PATH</key>
+    <string>/Users/kylehansen/repos/csp_options_app/.venv/bin:/Library/Frameworks/Python.framework/Versions/3.14/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>

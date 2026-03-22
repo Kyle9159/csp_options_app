@@ -1,10 +1,11 @@
 # dashboard_server.py — Interactive Dashboard Server (Dec 2025)
 
-from flask import Flask, jsonify, send_from_directory, request
+from flask import Flask, jsonify, send_from_directory, request, redirect
 import uuid
 import asyncio
 import threading
 import os
+import json
 from datetime import datetime
 import time
 import pytz
@@ -24,7 +25,6 @@ dotenv.load_dotenv()
 from covered_call_bot import main as cc_main
 from dividend_tracker_bot import main as div_main
 import simple_options_scanner
-from generate_dashboard import calculate_conservative_cc
 from grok_utils import get_grok_sentiment_cached as get_grok_sentiment, get_grok_analysis
 from open_trade_monitor import load_trades_from_sheet, update_sheet_with_live_data, get_sheet
 from helper_functions import safe_float, safe_int, safe_date
@@ -1016,18 +1016,23 @@ def get_market_pulse():
     
 @app.post("/refresh_dashboard")
 def refresh_dashboard():
+    """Spawn generate_dashboard.py as a subprocess so it gets a fresh Python
+    interpreter — avoids any module-level import state issues in the server."""
+    import subprocess, sys
     try:
-        # Run the full dashboard generation in a background thread
-        threading.Thread(target=lambda: asyncio.run(run_all_bots_and_generate()), daemon=True).start()
-        return {"status": "Dashboard refresh started! New data in ~2 minutes."}
+        python = sys.executable
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'generate_dashboard.py')
+        subprocess.Popen(
+            [python, script],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stdout=open('/tmp/csp-generate.log', 'a'),
+            stderr=subprocess.STDOUT,
+        )
+        logger.info("Dashboard regeneration started as subprocess — see /tmp/csp-generate.log")
+        return {"status": "Dashboard refresh started! New data in ~2 minutes. Reload the page when done."}
     except Exception as e:
+        logger.error(f"refresh_dashboard failed: {e}")
         return {"status": f"Refresh failed: {str(e)}"}, 500
-
-# Helper to run the async generation
-async def run_all_bots_and_generate():
-    from generate_dashboard import run_all_bots, generate_html
-    await run_all_bots()  # your existing function
-    generate_html()       # your existing function
 
 # One-off wheel scan (since wheel_alert_loop is infinite)
 # async def one_wheel_scan():
@@ -3077,6 +3082,178 @@ def api_buy_to_close():
         }), 500
 
 
+# =============================================================================
+# SCHWAB OAUTH WEB FLOW
+# Replaces the terminal paste-URL dance with a 2-click browser flow.
+# Requires REDIRECT_URI=http://localhost:5000/auth/callback in .env AND
+# the same value registered in your Schwab developer portal app settings.
+# =============================================================================
+
+# Holds the AuthContext between /auth/start and /auth/callback (single-user local app)
+_pending_auth_context = None
+
+TOKEN_PATH = os.getenv('TOKEN_PATH', 'cache_files/schwab_token.json')
+LAST_AUTH_PATH = 'cache_files/schwab_last_auth.txt'
+
+
+@app.route('/api/auth/status')
+def auth_status():
+    """Check Schwab token health. Returns JSON without triggering any browser flow."""
+    if not os.path.exists(TOKEN_PATH):
+        return jsonify({
+            'status': 'missing',
+            'needs_reauth': True,
+            'message': 'No token file found — re-authorization required.'
+        })
+
+    try:
+        with open(TOKEN_PATH, 'r') as f:
+            token = json.load(f)
+
+        now = time.time()
+
+        # Determine days since last full OAuth (refresh token age proxy)
+        if os.path.exists(LAST_AUTH_PATH):
+            with open(LAST_AUTH_PATH, 'r') as f:
+                last_auth_ts = float(f.read().strip())
+        else:
+            # Fall back to token file mtime as a proxy
+            last_auth_ts = os.path.getmtime(TOKEN_PATH)
+
+        days_since_auth = (now - last_auth_ts) / 86400
+        needs_reauth = days_since_auth >= 7
+        expiring_soon = days_since_auth >= 5
+
+        if needs_reauth:
+            return jsonify({
+                'status': 'expired',
+                'needs_reauth': True,
+                'days_since_auth': round(days_since_auth, 1),
+                'message': f'Schwab refresh token expired ({round(days_since_auth, 1)} days old). Click Re-Authorize.'
+            })
+        elif expiring_soon:
+            return jsonify({
+                'status': 'expiring_soon',
+                'needs_reauth': False,
+                'days_since_auth': round(days_since_auth, 1),
+                'days_until_expiry': round(7 - days_since_auth, 1),
+                'message': f'Token expires in {round(7 - days_since_auth, 1)} days — consider re-authorizing soon.'
+            })
+        else:
+            return jsonify({
+                'status': 'ok',
+                'needs_reauth': False,
+                'days_since_auth': round(days_since_auth, 1),
+                'message': 'Schwab token is valid.'
+            })
+
+    except (json.JSONDecodeError, ValueError, OSError) as e:
+        return jsonify({
+            'status': 'error',
+            'needs_reauth': True,
+            'message': f'Token check failed: {str(e)}'
+        })
+
+
+@app.route('/auth/start')
+def auth_start():
+    """Initiate Schwab OAuth — redirects browser to Schwab login page.
+
+    IMPORTANT: REDIRECT_URI in .env must be set to http://localhost:5000/auth/callback
+    AND the same value must be registered in your Schwab developer portal app.
+    """
+    global _pending_auth_context
+    from schwab import auth as schwab_auth
+
+    api_key = os.getenv('SCHWAB_API_KEY')
+    callback_url = 'https://127.0.0.1:5001/auth/callback'
+
+    if not api_key:
+        return jsonify({'error': 'SCHWAB_API_KEY not configured'}), 500
+
+    try:
+        ctx = schwab_auth.get_auth_context(api_key, callback_url)
+        _pending_auth_context = ctx
+        logger.info(f"Schwab OAuth flow started, redirecting to Schwab login")
+        return redirect(ctx.authorization_url)
+    except Exception as e:
+        logger.error(f"auth_start failed: {e}")
+        return f"<h3>Failed to start auth: {e}</h3><a href='/'>Back</a>", 500
+
+
+@app.route('/auth/callback')
+def auth_callback():
+    """Handle Schwab OAuth callback — exchanges code for tokens and saves them."""
+    global _pending_auth_context
+    from schwab import auth as schwab_auth
+
+    if 'error' in request.args:
+        err = request.args.get('error', 'unknown')
+        logger.error(f"Schwab auth callback error: {err}")
+        return f"""<html><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:40px">
+            <h2 style="color:#fb923c">&#9888; Authorization Failed</h2>
+            <p>Schwab returned error: <code>{err}</code></p>
+            <a href="/" style="color:#60a5fa">&#8592; Back to Dashboard</a>
+        </body></html>""", 400
+
+    if 'code' not in request.args:
+        return "<h3>No authorization code received from Schwab.</h3><a href='/'>Back</a>", 400
+
+    if _pending_auth_context is None:
+        return """<html><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:40px">
+            <h2 style="color:#fb923c">&#9888; Session Expired</h2>
+            <p>Auth session not found. Please <a href="/auth/start" style="color:#60a5fa">start again</a>.</p>
+        </body></html>""", 400
+
+    api_key = os.getenv('SCHWAB_API_KEY')
+    app_secret = os.getenv('SCHWAB_APP_SECRET')
+    received_url = request.url
+
+    # HTTPS-behind-proxy fix: Schwab may redirect to http:// but we need to
+    # match the registered callback URL exactly.
+    if received_url.startswith('http://') and 'localhost' in received_url:
+        pass  # localhost http is fine
+
+    def token_write_func(token):
+        os.makedirs('cache_files', exist_ok=True)
+        with open(TOKEN_PATH, 'w') as tf:
+            json.dump(token, tf, indent=2)
+        logger.info(f"Schwab token written to {TOKEN_PATH}")
+
+    try:
+        schwab_auth.client_from_received_url(
+            api_key=api_key,
+            app_secret=app_secret,
+            auth_context=_pending_auth_context,
+            received_url=received_url,
+            token_write_func=token_write_func,
+        )
+
+        # Record the timestamp so /api/auth/status can track the 7-day window
+        os.makedirs('cache_files', exist_ok=True)
+        with open(LAST_AUTH_PATH, 'w') as f:
+            f.write(str(time.time()))
+
+        _pending_auth_context = None
+        logger.info("Schwab OAuth re-authorization successful")
+
+        return """<html><head><meta http-equiv="refresh" content="2;url=/"></head>
+        <body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:40px;text-align:center">
+            <h2 style="color:#34d399">&#10003; Re-authorized Successfully!</h2>
+            <p>Redirecting to dashboard&hellip;</p>
+        </body></html>"""
+
+    except Exception as e:
+        logger.error(f"OAuth callback failed: {e}", exc_info=True)
+        _pending_auth_context = None
+        return f"""<html><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:40px">
+            <h2 style="color:#fb923c">&#9888; Token Exchange Failed</h2>
+            <p>{e}</p>
+            <p><a href="/auth/start" style="color:#60a5fa">Try again</a> &nbsp;|
+               <a href="/" style="color:#60a5fa">Dashboard</a></p>
+        </body></html>""", 500
+
+
 if __name__ == '__main__':
     logger.info("=" * 60)
     logger.info("DASHBOARD SERVER STARTING")
@@ -3116,15 +3293,48 @@ if __name__ == '__main__':
     logger.info("  - Trade journal with analytics")
     logger.info("  - Bollinger Bands technical analysis")
 
+    # --- Schwab token expiry Telegram alert (runs every 12 hours) ---
+    def _check_token_and_alert():
+        """Send a Telegram message if the Schwab refresh token is expiring soon."""
+        try:
+            _WARN_DAYS = 2  # alert when <= 2 days remain in the 7-day window
+            _INTERVAL_HOURS = 12
 
+            tg_token = os.getenv('TELEGRAM_TOKEN')
+            tg_chat  = os.getenv('TELEGRAM_CHAT_ID')
+
+            if tg_token and tg_chat and os.path.exists(LAST_AUTH_PATH):
+                with open(LAST_AUTH_PATH) as f:
+                    last_auth_ts = float(f.read().strip())
+                days_since = (time.time() - last_auth_ts) / 86400
+                days_left  = 7 - days_since
+                if days_left <= _WARN_DAYS:
+                    msg = (
+                        f"⚠️ Schwab token expiring in {days_left:.1f} day(s)!\n"
+                        f"Re-authorize now: https://127.0.0.1:5001/auth/start"
+                    )
+                    asyncio.run(
+                        telegram_bot(token=tg_token).send_message(chat_id=tg_chat, text=msg)
+                    )
+                    logger.info(f"Schwab token expiry Telegram alert sent ({days_left:.1f} days left)")
+        except Exception as e:
+            logger.warning(f"Token expiry alert check failed: {e}")
+        finally:
+            # Re-schedule regardless of success/failure
+            threading.Timer(12 * 3600, _check_token_and_alert).start()
+
+    # Run immediately on startup, then every 12 hours
+    threading.Timer(30, _check_token_and_alert).start()  # 30s delay so server is ready first
+    logger.info("Schwab token expiry check scheduled (every 12 hours, Telegram alert if <= 2 days remain)")
 
     # Production-ready configuration
     # For development, use Flask dev server
     # For production, use: gunicorn -w 4 -b 0.0.0.0:5000 dashboard_server:app
     app.run(
         host='127.0.0.1',
-        port=5000,
+        port=5001,
         debug=False,
         use_reloader=False,
-        threaded=True  # Enable threading for concurrent requests
+        threaded=True,   # Enable threading for concurrent requests
+        ssl_context='adhoc'  # HTTPS required for Schwab OAuth callback
     )

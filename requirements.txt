@@ -15,6 +15,7 @@ pydantic-settings>=2.0.0
 flask>=2.3.0
 flask-limiter>=3.5.0
 jinja2>=3.1.0
+pyopenssl>=23.0.0  # Required for Flask HTTPS (Schwab OAuth needs https://127.0.0.1)
 
 # API Communication
 requests>=2.31.0

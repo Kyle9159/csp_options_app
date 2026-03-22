@@ -44,8 +44,13 @@ GROK_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 CACHE_DIR = Path("cache_files")
 SENTIMENT_CACHE_FILE = CACHE_DIR / 'grok_sentiment_cache.json'
 
-# Schwab client
-c = get_client()
+# Schwab client — lazy loaded on first use so server starts even if token is expired
+c = None
+def _get_schwab_client():
+    global c
+    if c is None:
+        c = get_client()
+    return c
     
 async def send_alert(message):
     if not bot:

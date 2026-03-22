@@ -17,30 +17,29 @@ def get_client():
     # Load environment variables
     dotenv.load_dotenv()
     """
-    Returns a Schwab API client using easy_client authentication.
+    Returns a Schwab API client using client_from_token_file.
+    Raises an exception if the token is missing or the refresh token has expired
+    (rather than opening a browser). Use the /auth/start web flow to re-authorize.
 
     Uses environment variables for configuration:
     - SCHWAB_API_KEY: API key
     - SCHWAB_APP_SECRET: App secret
-    - REDIRECT_URI: Redirect URI (default: https://127.0.0.1:8182)
 
-    Token is stored in 'schwab_token.json'
+    Token is stored in 'cache_files/schwab_token.json'
     """
     api_key = os.getenv('SCHWAB_API_KEY')
     app_secret = os.getenv('SCHWAB_APP_SECRET')
-    redirect_uri = os.getenv('REDIRECT_URI', 'https://127.0.0.1:8182')
     token_path = 'cache_files/schwab_token.json'
 
     if not api_key or not app_secret:
         raise ValueError("SCHWAB_API_KEY and SCHWAB_APP_SECRET environment variables must be set")
 
-    client = auth.easy_client(
+    client = auth.client_from_token_file(
+        token_path=token_path,
         api_key=api_key,
         app_secret=app_secret,
-        callback_url=redirect_uri,
-        token_path=token_path,
         asyncio=False,
-        enforce_enums=True
+        enforce_enums=True,
     )
 
     return client

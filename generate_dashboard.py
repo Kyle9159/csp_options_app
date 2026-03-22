@@ -119,9 +119,14 @@ original_leaps_send = leaps_scanner.send_alert
 leaps_scanner.send_alert = async_capture_leaps
 
     
-# Schwab client
+# Schwab client — lazy loaded so importing this module doesn't trigger auth flow
 c = None
-client = get_client()
+client = None
+def _get_client():
+    global client
+    if client is None:
+        client = get_client()
+    return client
 
 # === GROK CACHING UTILITIES ===
 CACHE_DIR = Path("cache_files")

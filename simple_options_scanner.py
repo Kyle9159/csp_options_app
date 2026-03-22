@@ -61,9 +61,14 @@ GROK_CACHE_FILE = CACHE_DIR / 'grok_sentiment_cache.json'
 
 MAX_CAPITAL_PER_TRADE = float(os.getenv('MAX_CAPITAL_PER_TRADE', 45000))
 
-# Schwab client
-c = get_client()
-c.set_enforce_enums(False)
+# Schwab client — lazy loaded on first use so server starts even if token is expired
+_c = None
+def _get_schwab_client():
+    global _c
+    if _c is None:
+        _c = get_client()
+        _c.set_enforce_enums(False)
+    return _c
 
 ET_TZ = pytz.timezone('US/Eastern')
 
@@ -267,7 +272,7 @@ def is_red_day(symbol):
         rsi = rsi_indicator.rsi().iloc[-1]
         current_price = df['Close'].iloc[-1]
 
-        is_safe = rsi < 45  # Stricter for better wheel strategy outcomes
+        is_safe = rsi < 50  # Stricter for better wheel strategy outcomes
         return is_safe, float(rsi), float(current_price)
     except Exception as e:
         print(f"   RSI error {symbol}: {e}")
@@ -682,7 +687,7 @@ def find_high_probability_options(symbol, current_price, tier, regime, grok_sent
     opportunities = []
     
     try:
-        chain_resp = c.get_option_chain(
+        chain_resp = _get_schwab_client().get_option_chain(
             symbol=symbol,
             contract_type='PUT',
             from_date=datetime.now().date(),
