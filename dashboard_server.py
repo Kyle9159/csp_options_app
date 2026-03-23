@@ -3164,7 +3164,8 @@ def auth_start():
     from schwab import auth as schwab_auth
 
     api_key = os.getenv('SCHWAB_API_KEY')
-    callback_url = 'https://127.0.0.1:5002/auth/callback'
+    # Must exactly match the Callback URL registered in your Schwab developer portal
+    callback_url = os.getenv('REDIRECT_URI', 'https://127.0.0.1/auth/callback')
 
     if not api_key:
         return jsonify({'error': 'SCHWAB_API_KEY not configured'}), 500
