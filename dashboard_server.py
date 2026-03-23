@@ -3164,7 +3164,7 @@ def auth_start():
     from schwab import auth as schwab_auth
 
     api_key = os.getenv('SCHWAB_API_KEY')
-    callback_url = 'https://127.0.0.1:5001/auth/callback'
+    callback_url = 'https://127.0.0.1:5002/auth/callback'
 
     if not api_key:
         return jsonify({'error': 'SCHWAB_API_KEY not configured'}), 500
@@ -3309,7 +3309,7 @@ if __name__ == '__main__':
                 if days_left <= _WARN_DAYS:
                     msg = (
                         f"⚠️ Schwab token expiring in {days_left:.1f} day(s)!\n"
-                        f"Re-authorize now: https://127.0.0.1:5001/auth/start"
+                        f"Re-authorize now: https://127.0.0.1:5002/auth/start"
                     )
                     asyncio.run(
                         telegram_bot(token=tg_token).send_message(chat_id=tg_chat, text=msg)
@@ -3330,7 +3330,7 @@ if __name__ == '__main__':
     # For production, use: gunicorn -w 4 -b 0.0.0.0:5000 dashboard_server:app
     app.run(
         host='127.0.0.1',
-        port=5001,
+        port=5002,
         debug=False,
         use_reloader=False,
         threaded=True,   # Enable threading for concurrent requests
