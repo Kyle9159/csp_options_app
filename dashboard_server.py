@@ -410,6 +410,50 @@ def run_open_trades_refresh():
     run_async_with_progress(task_id, create_refresh_task)
     return jsonify({"status": "Refreshing Open CSPs with live data — sheet updating!", "task_id": task_id})
 
+@app.route('/grok/market_pulse')
+def grok_market_pulse():
+    """Broad market sentiment pulse for the dashboard header tile."""
+    if not XAI_API_KEY:
+        return jsonify({"error": "XAI API key not configured"})
+    try:
+        # Try cached fast-model sentiment first
+        from grok_utils import _call_grok, _read_cache, _write_cache, MODEL_MID
+        from pathlib import Path
+        cache_file = Path("cache_files") / "grok_market_pulse.json"
+        cached = _read_cache(cache_file, ttl_seconds=3600)
+        if cached:
+            return jsonify({"pulse": cached["pulse"], "sentiment": cached.get("sentiment", "NEUTRAL")})
+
+        system = (
+            "You are a professional options market analyst. Be direct and concise. "
+            "Use plain text only — no markdown symbols like **, ##, or bullet dashes. "
+            "Use numbered lists or plain line breaks."
+        )
+        user = (
+            "Give me a market pulse for today's cash-secured put (CSP) wheel trading. "
+            "Cover these 4 points (each on its own line):\n"
+            "1. Overall SPY/QQQ direction and VIX level — bullish, neutral, or bearish?\n"
+            "2. Best sectors/themes for CSP entry today and why.\n"
+            "3. Sectors or names to avoid (earnings risk, news risk, high vol without premium).\n"
+            "4. One tactical note — what should a CSP trader do differently today vs a normal day?\n"
+            "Keep the whole response under 200 words."
+        )
+        pulse = _call_grok(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            model=MODEL_MID,
+            max_tokens=350,
+        ) or "Market pulse temporarily unavailable."
+
+        from grok_utils import _extract_sentiment
+        sentiment = _extract_sentiment(pulse)
+        _write_cache(cache_file, {"pulse": pulse, "sentiment": sentiment})
+
+        return jsonify({"pulse": pulse, "sentiment": sentiment})
+    except Exception as e:
+        logger.error(f"Market pulse error: {e}")
+        return jsonify({"error": f"Market pulse unavailable: {e}"}), 500
+
+
 @app.route('/grok/analyze/<symbol>')
 def grok_analyze(symbol):
     if not XAI_API_KEY:
