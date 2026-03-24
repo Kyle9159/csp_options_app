@@ -3082,21 +3082,82 @@ def api_buy_to_close():
 
 # =============================================================================
 # SCHWAB OAUTH WEB FLOW
-# Replaces the terminal paste-URL dance with a 2-click browser flow.
-# Requires REDIRECT_URI=http://localhost:5000/auth/callback in .env AND
-# the same value registered in your Schwab developer portal app settings.
+# Uses schwab-py's local HTTPS listener on 127.0.0.1 (recommended callback 8182)
+# while keeping the dashboard itself on port 5000.
+# REDIRECT_URI in .env must exactly match an approved Schwab callback URL.
 # =============================================================================
 
-# Holds the AuthContext between /auth/start and /auth/callback (single-user local app)
+# Schwab auth state for the local single-user dashboard.
 _pending_auth_context = None
+_auth_flow_lock = threading.Lock()
+_auth_flow_state = {
+    'status': 'idle',
+    'message': '',
+    'started_at': None,
+}
 
 TOKEN_PATH = os.getenv('TOKEN_PATH', 'cache_files/schwab_token.json')
 LAST_AUTH_PATH = 'cache_files/schwab_last_auth.txt'
 
 
+def _set_auth_flow_state(status: str, message: str = '') -> None:
+    _auth_flow_state['status'] = status
+    _auth_flow_state['message'] = message
+    _auth_flow_state['started_at'] = time.time() if status == 'running' else _auth_flow_state.get('started_at')
+
+
+def _run_schwab_login_flow() -> None:
+    from schwab import auth as schwab_auth
+
+    api_key = os.getenv('SCHWAB_API_KEY')
+    app_secret = os.getenv('SCHWAB_APP_SECRET')
+    callback_url = os.getenv('REDIRECT_URI', 'https://127.0.0.1:8182')
+
+    try:
+        os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
+        logger.info(f"Starting schwab-py login flow with callback {callback_url}")
+        schwab_auth.client_from_login_flow(
+            api_key=api_key,
+            app_secret=app_secret,
+            callback_url=callback_url,
+            token_path=TOKEN_PATH,
+            asyncio=False,
+            enforce_enums=True,
+            callback_timeout=300.0,
+            interactive=False,
+        )
+
+        with open(LAST_AUTH_PATH, 'w') as f:
+            f.write(str(time.time()))
+
+        _set_auth_flow_state('success', 'Schwab token refreshed successfully.')
+        logger.info('Schwab login flow completed successfully')
+    except Exception as e:
+        logger.error(f"Schwab login flow failed: {e}", exc_info=True)
+        _set_auth_flow_state('error', f'Schwab sign-in failed: {e}')
+    finally:
+        with _auth_flow_lock:
+            if _auth_flow_state['status'] == 'running':
+                _set_auth_flow_state('idle', '')
+
+
 @app.route('/api/auth/status')
 def auth_status():
     """Check Schwab token health. Returns JSON without triggering any browser flow."""
+    if _auth_flow_state['status'] == 'running':
+        return jsonify({
+            'status': 'auth_in_progress',
+            'needs_reauth': False,
+            'message': _auth_flow_state['message'] or 'Schwab sign-in flow is running in your browser.'
+        })
+
+    if _auth_flow_state['status'] == 'error':
+        return jsonify({
+            'status': 'auth_error',
+            'needs_reauth': True,
+            'message': _auth_flow_state['message'] or 'Schwab sign-in failed. Try again.'
+        })
+
     if not os.path.exists(TOKEN_PATH):
         return jsonify({
             'status': 'missing',
@@ -3155,27 +3216,42 @@ def auth_status():
 
 @app.route('/auth/start')
 def auth_start():
-    """Initiate Schwab OAuth — redirects browser to Schwab login page.
-
-    IMPORTANT: REDIRECT_URI in .env must be set to http://localhost:5000/auth/callback
-    AND the same value must be registered in your Schwab developer portal app.
-    """
-    global _pending_auth_context
-    from schwab import auth as schwab_auth
-
+    """Start Schwab re-authorization using schwab-py's local HTTPS callback listener."""
     api_key = os.getenv('SCHWAB_API_KEY')
-    # Must exactly match the Callback URL registered in your Schwab developer portal
-    callback_url = os.getenv('REDIRECT_URI', 'https://127.0.0.1/auth/callback')
+    app_secret = os.getenv('SCHWAB_APP_SECRET')
+    callback_url = os.getenv('REDIRECT_URI', 'https://127.0.0.1:8182')
 
-    if not api_key:
-        return jsonify({'error': 'SCHWAB_API_KEY not configured'}), 500
+    if not api_key or not app_secret:
+        return jsonify({'error': 'SCHWAB_API_KEY and SCHWAB_APP_SECRET must be configured'}), 500
+
+    if not callback_url.startswith('https://127.0.0.1'):
+        return jsonify({'error': 'REDIRECT_URI must use https://127.0.0.1 for schwab-py local login flow'}), 500
 
     try:
-        ctx = schwab_auth.get_auth_context(api_key, callback_url)
-        _pending_auth_context = ctx
-        logger.info(f"Schwab OAuth flow started, redirecting to Schwab login")
-        return redirect(ctx.authorization_url)
+        with _auth_flow_lock:
+            if _auth_flow_state['status'] == 'running':
+                return """<html><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:40px;text-align:center">
+                    <h2 style="color:#60a5fa">Schwab Sign-In Already Running</h2>
+                    <p>The browser-assisted login flow is already active. Finish the login window that opened, then return here.</p>
+                    <p><a href="/" style="color:#60a5fa">Back to Dashboard</a></p>
+                </body></html>"""
+
+            _set_auth_flow_state('running', 'Opening Schwab sign-in in your browser...')
+            thread = threading.Thread(target=_run_schwab_login_flow, daemon=True)
+            thread.start()
+
+        logger.info(f"Schwab OAuth flow started on callback listener {callback_url}")
+        return f"""<html><head><meta http-equiv="refresh" content="10;url=/"></head>
+        <body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:40px;text-align:center">
+            <h2 style="color:#60a5fa">Starting Schwab Sign-In</h2>
+            <p>Your browser should open automatically for Schwab login.</p>
+            <p>Callback listener: <code>{callback_url}</code></p>
+            <p>If the browser shows a self-signed certificate warning for <code>127.0.0.1:8182</code>, continue anyway. That is expected for the local callback listener.</p>
+            <p>After you finish login, you will be redirected back to the dashboard.</p>
+            <p><a href="/" style="color:#60a5fa">Return to Dashboard</a></p>
+        </body></html>"""
     except Exception as e:
+        _set_auth_flow_state('error', f'Schwab sign-in failed: {e}')
         logger.error(f"auth_start failed: {e}")
         return f"<h3>Failed to start auth: {e}</h3><a href='/'>Back</a>", 500
 
