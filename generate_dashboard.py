@@ -76,6 +76,9 @@ calendar_events = []
 grok_symbols = []
 grok_sentiment = "NEUTRAL"
 grok_summary = "Loading..."
+trade_history = []
+allocation_data = {}
+total_wheel_capital = 0
 
 leaps_opps = []
 captured_leaps = []
