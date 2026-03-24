@@ -3597,6 +3597,17 @@ if __name__ == '__main__':
     threading.Timer(30, _check_token_and_alert).start()  # 30s delay so server is ready first
     logger.info("Schwab token expiry check scheduled (every 12 hours, Telegram alert if <= 2 days remain)")
 
+    # --- Auto-regenerate dashboard HTML on startup ---
+    def _regen_dashboard():
+        try:
+            import generate_dashboard
+            generate_dashboard.generate_html()
+            logger.info("Dashboard HTML regenerated on startup")
+        except Exception as e:
+            logger.warning(f"Dashboard auto-regen failed: {e}")
+    threading.Timer(5, _regen_dashboard).start()
+    logger.info("Dashboard HTML will auto-regenerate in 5s")
+
     # --- Schwab trade sync (runs every 4 hours during market hours) ---
     def _scheduled_schwab_sync():
         """Sync trade outcomes from Schwab API on a recurring schedule."""

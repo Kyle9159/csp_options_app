@@ -2207,7 +2207,7 @@ def generate_html():
                     const div = document.getElementById('market-pulse');
                     div.innerHTML = "🔍 Updating market pulse...";
                     try {
-                        const resp = await fetch('http://127.0.0.1:5000/grok/market_pulse');
+                        const resp = await fetch('/grok/market_pulse');
                         if (!resp.ok) {
                             throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
                         }
@@ -5815,7 +5815,7 @@ def generate_html():
                     btn.disabled = true;
                     btn.innerHTML = "🗑️ Clearing...";
                     try {
-                        const resp = await fetch('http://127.0.0.1:5000/api/clear_cache', { method: 'POST' });
+                        const resp = await fetch('/api/clear_cache', { method: 'POST' });
                         const data = await resp.json();
                         if (data.ok) {
                             btn.innerHTML = `✅ Cleared ${data.data.deleted} files`;
