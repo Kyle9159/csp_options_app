@@ -2316,8 +2316,20 @@ def generate_html():
                                     <div class="grid-3">
                                         {% for opp in sorted_grok[:10] %}
                                             {% if opp.strike is defined %}
+                                                {% set opp_tier = opp.tier|default(2) %}
+                                                {% if opp_tier == 1 %}
+                                                    {% set tier_badge = '🏆 T1' %}
+                                                    {% set tier_color = '#34d399' %}
+                                                {% elif opp_tier == 2 %}
+                                                    {% set tier_badge = '⭐ T2' %}
+                                                    {% set tier_color = '#60a5fa' %}
+                                                {% else %}
+                                                    {% set tier_badge = '⚠️ T3' %}
+                                                    {% set tier_color = '#fb923c' %}
+                                                {% endif %}
                                                 <div class="top10-tile">
-                                                    <strong>#{{ loop.index }} • {{ opp.symbol }}</strong><br>
+                                                    <strong>#{{ loop.index }} • {{ opp.symbol }}</strong>
+                                                    <span style="background:rgba(0,0,0,0.25); color:{{ tier_color }}; font-size:0.75rem; padding:2px 7px; border-radius:8px; margin-left:6px; font-weight:600;">{{ tier_badge }}</span><br>
                                                     ${{ opp.strike|safe_format("%.0f") }}P • {{ opp.dte }} DTE<br>
                                                     <span style="color:#34d399;">Score: {{ opp.grok_trade_score|default(0) }}/100</span><br>
                                                     Premium: ${{ opp.premium|default(0)|safe_format("%.2f") }} • 
@@ -2364,9 +2376,24 @@ def generate_html():
                                             </div>
                                         {% endif %}
 
+                                        {% set tile_tier = tile.suggestions[0].tier|default(2) if tile.suggestions and tile.suggestions|length > 0 else 2 %}
+                                        {% if tile_tier == 1 %}
+                                            {% set tile_tier_label = '🏆 Tier 1' %}
+                                            {% set tile_tier_color = '#34d399' %}
+                                            {% set tile_tier_bg = 'rgba(52,211,153,0.15)' %}
+                                        {% elif tile_tier == 2 %}
+                                            {% set tile_tier_label = '⭐ Tier 2' %}
+                                            {% set tile_tier_color = '#60a5fa' %}
+                                            {% set tile_tier_bg = 'rgba(96,165,250,0.15)' %}
+                                        {% else %}
+                                            {% set tile_tier_label = '⚠️ Tier 3' %}
+                                            {% set tile_tier_color = '#fb923c' %}
+                                            {% set tile_tier_bg = 'rgba(251,146,60,0.15)' %}
+                                        {% endif %}
                                         <h3>
                                             {{ tile.symbol|default('Unknown') }}
-                                            <span style="margin-left:12px; font-size:1.3rem;">{{ tile.best_badge|default('⚠️') }}</span>
+                                            <span style="margin-left:10px; font-size:0.85rem; background:{{ tile_tier_bg }}; color:{{ tile_tier_color }}; padding:3px 10px; border-radius:10px; border:1px solid {{ tile_tier_color }}; font-weight:600; vertical-align:middle;">{{ tile_tier_label }}</span>
+                                            <span style="margin-left:10px; font-size:1.3rem;">{{ tile.best_badge|default('⚠️') }}</span>
                                             <span style="color:#94a3b8; font-size:1rem;">Best Score: {{ tile.best_score|default(0) }}/100</span>
                                         </h3>
                                         {% if tile.company_name %}
