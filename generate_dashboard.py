@@ -2177,10 +2177,14 @@ def generate_html():
             </style>
         </head>
         <body>
-            <div style="position:fixed; top:12px; left:12px; z-index:9999;">
+            <div style="position:fixed; top:12px; left:12px; z-index:9999; display:flex; gap:8px;">
                 <button onclick="refreshDashboard(this)" 
                     style="padding:12px 20px; background:#dc2626; color:white; border:none; border-radius:12px; cursor:pointer; font-weight:bold; box-shadow:0 4px 15px rgba(0,0,0,0.4);">
                 🔄 Refresh Dashboard
+            </button>
+                <button id="btn-clear-cache" onclick="clearCache(this)"
+                    style="padding:12px 20px; background:#7c3aed; color:white; border:none; border-radius:12px; cursor:pointer; font-weight:bold; box-shadow:0 4px 15px rgba(0,0,0,0.4);">
+                🗑️ Clear Cache
             </button>
             </div>
             <div class="container" style="margin-top:60px;">  <!-- Push content down a bit -->
@@ -5807,9 +5811,29 @@ def generate_html():
                     }
                 }
 
+                async function clearCache(btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = "🗑️ Clearing...";
+                    try {
+                        const resp = await fetch('http://127.0.0.1:5000/api/clear_cache', { method: 'POST' });
+                        const data = await resp.json();
+                        if (data.ok) {
+                            btn.innerHTML = `✅ Cleared ${data.data.deleted} files`;
+                            setTimeout(() => {
+                                btn.disabled = false;
+                                btn.innerHTML = "🗑️ Clear Cache";
+                            }, 3000);
+                        } else {
+                            btn.innerHTML = "❌ Failed";
+                            setTimeout(() => { btn.disabled = false; btn.innerHTML = "🗑️ Clear Cache"; }, 3000);
+                        }
+                    } catch (e) {
+                        btn.innerHTML = "❌ Server offline";
+                        setTimeout(() => { btn.disabled = false; btn.innerHTML = "🗑️ Clear Cache"; }, 3000);
+                    }
+                }
+
             </script>
-        </body>
-        </html>
     """
 
     template = env.from_string(template_str)
