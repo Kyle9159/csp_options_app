@@ -170,7 +170,7 @@ REGIME_SETTINGS = {
     },
     "NEUTRAL_OR_WEAK": {
         "delta_min": 0.15, "delta_max": 0.35,
-        "dte_min": 21, "dte_max": 60,
+        "dte_min": 21, "dte_max": 45,
         "target_profit_pct": 50,
         "tier_limit": "TIER_1_2",
         "name": "Balanced Wheel",
@@ -178,7 +178,7 @@ REGIME_SETTINGS = {
     },
     "CAUTIOUS": {
         "delta_min": 0.10, "delta_max": 0.30,
-        "dte_min": 30, "dte_max": 60,
+        "dte_min": 30, "dte_max": 45,
         "target_profit_pct": 50,
         "tier_limit": "TIER_1",
         "name": "Defensive Wheel",
@@ -186,7 +186,7 @@ REGIME_SETTINGS = {
     },
     "BEARISH_HIGH_VOL": {
         "delta_min": 0.10, "delta_max": 0.30,
-        "dte_min": 45, "dte_max": 60,
+        "dte_min": 45, "dte_max": 50,
         "target_profit_pct": 50,
         "tier_limit": "TIER_1",
         "name": "Ultra-Defensive Wheel",
@@ -865,19 +865,19 @@ def improved_put_score(premium, delta, dte, annualized_roi, iv, vol_surge, rsi, 
     elif iv_premium_pct < 0:
         iv_mult *= 0.95  # IV below HV (poor)
     
-    # DTE multiplier
+    # DTE multiplier — sweet spot is 30-45 DTE (fastest useful theta decay)
     if dte < 14:
-        dte_mult = 0.7  # Strong penalty for very short DTE (high theta risk, low premium)
+        dte_mult = 0.7   # Strong penalty — too short, high gamma risk
     elif dte < 21:
-        dte_mult = 0.9  # Mild penalty — too short for wheel safety
+        dte_mult = 0.9   # Mild penalty — too short for wheel safety
     elif 21 <= dte <= 30:
         dte_mult = 1.15  # Good — safe entry zone
     elif 30 <= dte <= 45:
-        dte_mult = 1.35   # BEST — ideal wheel sweet spot: good premium + manageable theta
-    elif 45 <= dte <= 60:
-        dte_mult = 1.15  # Still good — longer gives more buffer
-    else:  # >60 DTE
-        dte_mult = 1.05  # Slightly reduced — too long ties up capital
+        dte_mult = 1.35  # BEST — ideal wheel sweet spot
+    elif 45 < dte <= 50:
+        dte_mult = 1.0   # Acceptable for bearish regime only — slower theta
+    else:  # >50 DTE
+        dte_mult = 0.85  # Penalize — ties up capital too long
 
     # Distance bonus
     if distance_pct > 15:
