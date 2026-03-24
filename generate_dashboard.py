@@ -77,7 +77,17 @@ grok_symbols = []
 grok_sentiment = "NEUTRAL"
 grok_summary = "Loading..."
 trade_history = []
-allocation_data = {}
+allocation_data = {
+    'total_capital': 0,
+    'capital_at_risk': 0,
+    'pct_allocated': 0,
+    'positions_open': 0,
+    'max_positions': 5,
+    'remaining_capital': 0,
+    'room_for_trades': 0,
+    'max_per_trade': 0,
+    'sector_exposure': {}
+}
 total_wheel_capital = 0
 
 leaps_opps = []
