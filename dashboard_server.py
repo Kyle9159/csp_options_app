@@ -3431,51 +3431,6 @@ def api_clear_cache():
     Preserves schwab_token.json, schwab_last_auth.txt, and the trade outcomes DB.
     """
     import glob
-    cache_dir = os.path.join(os.path.dirname(__file__), 'cache_files')
-    patterns = [
-        'grok_opp_*.json',
-        'grok_market_sentiment.json',
-        'grok_market_pulse.json',
-        'simple_scanner_cache.json',
-        'leaps_cache.json',
-        '0dte_spreads_cache.json',
-        'support_resistance_cache.json',
-    ]
-    deleted = []
-    skipped = []
-    errors = []
-    for pattern in patterns:
-        for path in glob.glob(os.path.join(cache_dir, pattern)):
-            fname = os.path.basename(path)
-            if fname in CACHE_KEEP:
-                skipped.append(fname)
-                continue
-            try:
-                os.remove(path)
-                deleted.append(fname)
-            except Exception as e:
-                errors.append(f"{fname}: {e}")
-
-    logger.info(f"Cache cleared: {len(deleted)} files deleted")
-    return jsonify({'ok': True, 'data': {
-        'deleted': len(deleted),
-        'files': deleted,
-        'skipped': skipped,
-        'errors': errors,
-    }})
-
-
-# ==================== CACHE MANAGEMENT ROUTES ====================
-
-CACHE_KEEP = {"schwab_token.json", "schwab_last_auth.txt"}
-
-@app.route('/api/clear_cache', methods=['POST'])
-def api_clear_cache():
-    """
-    Delete Grok opportunity caches, scanner caches, and market pulse cache.
-    Preserves schwab_token.json, schwab_last_auth.txt, and the trade outcomes DB.
-    """
-    import glob
     cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache_files')
     patterns = [
         'grok_opp_*.json',
