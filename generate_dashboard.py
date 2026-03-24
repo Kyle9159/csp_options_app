@@ -3922,163 +3922,28 @@ def generate_html():
 
                     <!-- Performance Overview Sub-tab -->
                     <div id="analytics-performance" class="analytics-subtab">
-                        <div style="background:linear-gradient(135deg, #1e293b, #0f172a); padding:28px; border-radius:20px; border:2px solid #334155; margin-bottom:24px;">
+                        <!-- Trade Performance Summary (loaded dynamically) -->
+                        <div id="analytics-perf-summary-container" style="background:linear-gradient(135deg, #1e293b, #0f172a); padding:28px; border-radius:20px; border:2px solid #334155; margin-bottom:24px;">
                             <h3 style="color:#e2e8f0; margin-bottom:20px;">📊 Trade Performance Summary</h3>
-                            {% if trade_history and trade_history|length > 0 %}
-                            {% set total_trades = trade_history|length %}
-                            {% set ns = namespace(wins=0, losses=0, total_pnl=0.0, total_win_pnl=0.0, total_loss_pnl=0.0, total_days_held=0) %}
-                            {% for trade in trade_history %}
-                                {% set pnl_raw = trade.get('Net Profit $', '0')|string|replace('$', '')|replace(',', '') %}
-                                {% set pnl = pnl_raw|safe_float %}
-                                {% set days = trade.get('Days Held', 0)|safe_float %}
-                                {% if pnl > 0 %}
-                                    {% set ns.wins = ns.wins + 1 %}
-                                    {% set ns.total_win_pnl = ns.total_win_pnl + pnl %}
-                                {% else %}
-                                    {% set ns.losses = ns.losses + 1 %}
-                                    {% set ns.total_loss_pnl = ns.total_loss_pnl + (pnl|abs) %}
-                                {% endif %}
-                                {% set ns.total_pnl = ns.total_pnl + pnl %}
-                                {% set ns.total_days_held = ns.total_days_held + days %}
-                            {% endfor %}
-                            {% set win_rate = ((ns.wins / total_trades) * 100)|round(1) if total_trades > 0 else 0 %}
-                            {% set avg_win = (ns.total_win_pnl / ns.wins)|round(2) if ns.wins > 0 else 0 %}
-                            {% set avg_loss = (ns.total_loss_pnl / ns.losses)|round(2) if ns.losses > 0 else 0 %}
-                            {% set avg_days_held = (ns.total_days_held / total_trades)|round(1) if total_trades > 0 else 0 %}
-                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:20px;">
-                                <div style="text-align:center; padding:20px; background:rgba(52,211,153,0.1); border-radius:12px; border:1px solid #34d399;">
-                                    <div style="font-size:2.5rem; color:#34d399; font-weight:bold;">{{ win_rate }}%</div>
-                                    <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Win Rate</div>
-                                    <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">{{ ns.wins }}W / {{ ns.losses }}L</div>
-                                </div>
-                                <div style="text-align:center; padding:20px; background:rgba(96,165,250,0.1); border-radius:12px; border:1px solid #60a5fa;">
-                                    <div style="font-size:2.5rem; {% if ns.total_pnl >= 0 %}color:#34d399{% else %}color:#fb923c{% endif %}; font-weight:bold;">${{ ns.total_pnl|round(2) }}</div>
-                                    <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Total P/L</div>
-                                    <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">{{ total_trades }} trades</div>
-                                </div>
-                                <div style="text-align:center; padding:20px; background:rgba(251,191,36,0.1); border-radius:12px; border:1px solid #fbbf24;">
-                                    <div style="font-size:2.5rem; color:#34d399; font-weight:bold;">${{ avg_win }}</div>
-                                    <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Avg Win</div>
-                                    <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">Avg Loss: ${{ avg_loss }}</div>
-                                </div>
-                                <div style="text-align:center; padding:20px; background:rgba(168,85,247,0.1); border-radius:12px; border:1px solid #a855f7;">
-                                    <div style="font-size:2.5rem; color:#a855f7; font-weight:bold;">{{ avg_days_held }}</div>
-                                    <div style="color:#94a3b8; font-size:0.9rem; margin-top:8px;">Avg Days Held</div>
-                                    <div style="color:#cbd5e1; font-size:0.85rem; margin-top:4px;">{{ total_trades }} closed trades</div>
-                                </div>
+                            <div id="analytics-perf-summary-content" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:20px;">
+                                <div style="text-align:center; padding:20px; color:#94a3b8;">Loading performance data...</div>
                             </div>
-                            {% else %}
-                            <p style="color:#94a3b8; text-align:center; padding:20px;">No trade history available</p>
-                            {% endif %}
                         </div>
 
-                        <!-- Current Open Trades Table -->
+                        <!-- Current Open Trades Table (loaded dynamically from Schwab) -->
                         <div style="background:linear-gradient(135deg, #1e293b, #0f172a); padding:28px; border-radius:20px; border:2px solid #334155; margin-bottom:24px;">
-                            <h3 style="color:#e2e8f0; margin-bottom:20px;">📈 Current Open Trades</h3>
-                            {% if open_trades and open_trades|length > 0 %}
-                                <div style="overflow-x:auto;">
-                                    <table style="width:100%; border-collapse:collapse; color:#e2e8f0;">
-                                        <thead>
-                                            <tr style="border-bottom:2px solid #334155;">
-                                                <th style="padding:12px; text-align:left; color:#94a3b8; font-weight:600;">Symbol</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Strike</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Exp</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">DTE</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Contracts</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Entry $</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Current $</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">P/L</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Progress</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {% for trade in open_trades %}
-                                            <tr style="border-bottom:1px solid #334155;">
-                                                <td style="padding:12px; font-weight:600;">{{ trade['Symbol'] }}</td>
-                                                <td style="padding:12px; text-align:right;">${{ trade['Strike']|safe_format("%.2f") }}</td>
-                                                <td style="padding:12px; text-align:right;">{{ trade['Exp Date'] }}</td>
-                                                <td style="padding:12px; text-align:right;">{{ trade.get('_dte', 'N/A') }}</td>
-                                                <td style="padding:12px; text-align:right;">{{ trade['Contracts Qty']|default(1) }}</td>
-                                                <td style="padding:12px; text-align:right; color:#34d399;">${{ trade['Entry Premium']|safe_format("%.2f") }}</td>
-                                                <td style="padding:12px; text-align:right; color:#60a5fa;">${{ trade.get('_current_premium', 0)|safe_format("%.2f") }}</td>
-                                                <td style="padding:12px; text-align:right; {% if trade.get('_pl_dollars', 0) >= 0 %}color:#34d399{% else %}color:#fb923c{% endif %}; font-weight:600;">
-                                                    {% if trade.get('_pl_dollars', 0) >= 0 %}+{% endif %}${{ trade.get('_pl_dollars', 0)|safe_format("%.0f") }}
-                                                </td>
-                                                <td style="padding:12px; text-align:right; color:#fbbf24; font-weight:600;">{{ trade.get('_progress_pct', 0)|safe_format("%.0f") }}%</td>
-                                            </tr>
-                                            {% endfor %}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            {% else %}
-                                <p style="color:#94a3b8; text-align:center; padding:20px;">No open trades</p>
-                            {% endif %}
+                            <h3 style="color:#e2e8f0; margin-bottom:20px;">📈 Current Open Trades (Live from Schwab)</h3>
+                            <div id="analytics-open-trades-content">
+                                <p style="color:#94a3b8; text-align:center; padding:20px;">Loading live positions...</p>
+                            </div>
                         </div>
 
-                        <!-- Trade History Table (Server-side rendered) -->
+                        <!-- Trade History Table (loaded dynamically from tracker DB) -->
                         <div style="background:linear-gradient(135deg, #1e293b, #0f172a); padding:28px; border-radius:20px; border:2px solid #334155; margin-bottom:24px;">
                             <h3 style="color:#e2e8f0; margin-bottom:20px;">📋 Trade History (Closed Trades)</h3>
-                            {% if trade_history and trade_history|length > 0 %}
-                                <div style="overflow-x:auto; max-height:500px; overflow-y:auto;">
-                                    <table style="width:100%; border-collapse:collapse; color:#e2e8f0;">
-                                        <thead style="position:sticky; top:0; background:#1e293b; z-index:10;">
-                                            <tr style="border-bottom:2px solid #334155;">
-                                                <th style="padding:12px; text-align:left; color:#94a3b8; font-weight:600;">Symbol</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Strike</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Entry</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Exit</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Days</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Entry $</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Exit $</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">Net P/L</th>
-                                                <th style="padding:12px; text-align:right; color:#94a3b8; font-weight:600;">ROI%</th>
-                                                <th style="padding:12px; text-align:center; color:#94a3b8; font-weight:600;">Result</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {% for trade in trade_history %}
-                                            {% set pnl_raw = trade.get('Net Profit $', '0')|string|replace('$', '')|replace(',', '') %}
-                                            {% set pnl = pnl_raw|safe_float %}
-                                            {% set roi_raw = trade.get('ROI %', '0')|string|replace('%', '') %}
-                                            {% set roi = roi_raw|safe_float %}
-                                            {% set strike_raw = trade.get('Strike', '0')|string|replace('$', '')|replace(',', '') %}
-                                            {% set entry_prem_raw = trade.get('Entry Premium', '0')|string|replace('$', '')|replace(',', '') %}
-                                            {% set exit_prem_raw = trade.get('Exit Premium', '0')|string|replace('$', '')|replace(',', '') %}
-                                            {% set win_loss = trade.get('Win/Loss', '') %}
-                                            <tr style="border-bottom:1px solid #334155;">
-                                                <td style="padding:12px; font-weight:600;">{{ trade.get('Symbol', 'N/A') }}</td>
-                                                <td style="padding:12px; text-align:right;">${{ strike_raw|safe_format("%.2f") }}</td>
-                                                <td style="padding:12px; text-align:right; font-size:0.85rem;">{{ trade.get('Entry Date', 'N/A') }}</td>
-                                                <td style="padding:12px; text-align:right; font-size:0.85rem;">{{ trade.get('Exit Date', 'N/A') }}</td>
-                                                <td style="padding:12px; text-align:right;">{{ trade.get('Days Held', 0) }}</td>
-                                                <td style="padding:12px; text-align:right; color:#34d399;">${{ entry_prem_raw|safe_format("%.2f") }}</td>
-                                                <td style="padding:12px; text-align:right; color:#60a5fa;">${{ exit_prem_raw|safe_format("%.2f") }}</td>
-                                                <td style="padding:12px; text-align:right; {% if pnl >= 0 %}color:#34d399{% else %}color:#fb923c{% endif %}; font-weight:600;">
-                                                    {% if pnl >= 0 %}+{% endif %}${{ pnl|safe_format("%.2f") }}
-                                                </td>
-                                                <td style="padding:12px; text-align:right; {% if roi >= 0 %}color:#34d399{% else %}color:#fb923c{% endif %}; font-weight:600;">
-                                                    {% if roi >= 0 %}+{% endif %}{{ roi|safe_format("%.2f") }}%
-                                                </td>
-                                                <td style="padding:12px; text-align:center;">
-                                                    {% if win_loss == 'WIN' %}
-                                                    <span style="background:#10b981; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:600;">WIN</span>
-                                                    {% elif win_loss == 'LOSS' %}
-                                                    <span style="background:#ef4444; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:600;">LOSS</span>
-                                                    {% else %}
-                                                    <span style="background:#6b7280; color:white; padding:4px 10px; border-radius:12px; font-size:0.8rem;">{{ win_loss or 'N/A' }}</span>
-                                                    {% endif %}
-                                                </td>
-                                            </tr>
-                                            {% endfor %}
-                                        </tbody>
-                                    </table>
-                                </div>
-                                <div style="color:#94a3b8; font-size:0.85rem; margin-top:12px; text-align:right;">
-                                    Showing {{ trade_history|length }} closed trades
-                                </div>
-                            {% else %}
-                                <p style="color:#94a3b8; text-align:center; padding:20px;">No closed trades found in Trade_History sheet</p>
-                            {% endif %}
+                            <div id="analytics-history-content">
+                                <p style="color:#94a3b8; text-align:center; padding:20px;">Loading trade history...</p>
+                            </div>
                         </div>
                     </div>
 
@@ -4273,10 +4138,176 @@ def generate_html():
                         // Add active class to clicked button
                         event.target.classList.add('active');
 
+                        // Load live analytics data when performance tab is shown
+                        if (subtab === 'performance') {
+                            loadAnalytics();
+                        }
+
                         // Initialize Portfolio Greeks when that sub-tab is shown
                         if (subtab === 'greeks' && typeof initAnalyticsGreeks === 'function') {
                             initAnalyticsGreeks();
                         }
+                    }
+
+                    // ── Analytics dynamic data loader ──────────────────────────
+                    function loadAnalytics() {
+                        _loadAnalyticsSummary();
+                        _loadAnalyticsOpen();
+                        _loadAnalyticsHistory();
+                    }
+
+                    function _loadAnalyticsSummary() {
+                        const container = document.getElementById('analytics-perf-summary-content');
+                        if (!container) return;
+                        fetch('/api/analytics/summary')
+                            .then(r => r.json())
+                            .then(resp => {
+                                if (!resp.ok) throw new Error(resp.error || 'Failed');
+                                const d = resp.data;
+                                const pnlColor = d.total_pnl >= 0 ? '#34d399' : '#fb923c';
+                                container.innerHTML = `
+                                    <div style="text-align:center;padding:20px;background:rgba(52,211,153,0.1);border-radius:12px;border:1px solid #34d399;">
+                                        <div style="font-size:2.5rem;color:#34d399;font-weight:bold;">${d.win_rate}%</div>
+                                        <div style="color:#94a3b8;font-size:0.9rem;margin-top:8px;">Win Rate</div>
+                                        <div style="color:#cbd5e1;font-size:0.85rem;margin-top:4px;">${d.wins}W / ${d.losses}L</div>
+                                    </div>
+                                    <div style="text-align:center;padding:20px;background:rgba(96,165,250,0.1);border-radius:12px;border:1px solid #60a5fa;">
+                                        <div style="font-size:2.5rem;color:${pnlColor};font-weight:bold;">$${d.total_pnl >= 0 ? '' : '-'}${Math.abs(d.total_pnl).toFixed(2)}</div>
+                                        <div style="color:#94a3b8;font-size:0.9rem;margin-top:8px;">Total P/L (${d.period_days}d)</div>
+                                        <div style="color:#cbd5e1;font-size:0.85rem;margin-top:4px;">${d.total_closed} closed trades</div>
+                                    </div>
+                                    <div style="text-align:center;padding:20px;background:rgba(251,191,36,0.1);border-radius:12px;border:1px solid #fbbf24;">
+                                        <div style="font-size:2.5rem;color:#34d399;font-weight:bold;">$${Math.abs(d.avg_pnl || 0).toFixed(2)}</div>
+                                        <div style="color:#94a3b8;font-size:0.9rem;margin-top:8px;">Avg P/L per Trade</div>
+                                        <div style="color:#cbd5e1;font-size:0.85rem;margin-top:4px;">Ann. ${d.avg_annualized || 0}%</div>
+                                    </div>
+                                    <div style="text-align:center;padding:20px;background:rgba(168,85,247,0.1);border-radius:12px;border:1px solid #a855f7;">
+                                        <div style="font-size:2.5rem;color:#a855f7;font-weight:bold;">${d.avg_holding_days || 0}</div>
+                                        <div style="color:#94a3b8;font-size:0.9rem;margin-top:8px;">Avg Days Held</div>
+                                        <div style="color:#cbd5e1;font-size:0.85rem;margin-top:4px;">${d.open_count || 0} open positions</div>
+                                    </div>`;
+                            })
+                            .catch(err => {
+                                if (container) container.innerHTML = `<div style="color:#fb923c;text-align:center;padding:20px;">Failed to load summary: ${err.message}</div>`;
+                            });
+                    }
+
+                    function _loadAnalyticsOpen() {
+                        const container = document.getElementById('analytics-open-trades-content');
+                        if (!container) return;
+                        fetch('/api/analytics/open')
+                            .then(r => r.json())
+                            .then(resp => {
+                                if (!resp.ok) throw new Error(resp.error || 'Failed');
+                                const trades = resp.data;
+                                if (!trades || trades.length === 0) {
+                                    container.innerHTML = '<p style="color:#94a3b8;text-align:center;padding:20px;">No open positions found in Schwab account</p>';
+                                    return;
+                                }
+                                const rows = trades.map(t => {
+                                    const pl = parseFloat(t._pl_dollars || 0);
+                                    const plColor = pl >= 0 ? '#34d399' : '#fb923c';
+                                    const plSign = pl >= 0 ? '+' : '';
+                                    return `<tr style="border-bottom:1px solid #334155;">
+                                        <td style="padding:12px;font-weight:600;">${t.Symbol}</td>
+                                        <td style="padding:12px;text-align:right;">$${parseFloat(t.Strike||0).toFixed(2)}</td>
+                                        <td style="padding:12px;text-align:right;">${t['Exp Date']||''}</td>
+                                        <td style="padding:12px;text-align:right;">${t._dte ?? 'N/A'}</td>
+                                        <td style="padding:12px;text-align:right;">${t['Contracts Qty']||1}</td>
+                                        <td style="padding:12px;text-align:right;color:#34d399;">$${parseFloat(t['Entry Premium']||0).toFixed(2)}</td>
+                                        <td style="padding:12px;text-align:right;color:#60a5fa;">$${parseFloat(t._current_premium||0).toFixed(2)}</td>
+                                        <td style="padding:12px;text-align:right;color:${plColor};font-weight:600;">${plSign}$${Math.abs(pl).toFixed(0)}</td>
+                                        <td style="padding:12px;text-align:right;color:#fbbf24;font-weight:600;">${parseFloat(t._progress_pct||0).toFixed(0)}%</td>
+                                    </tr>`;
+                                }).join('');
+                                container.innerHTML = `
+                                    <div style="overflow-x:auto;">
+                                        <table style="width:100%;border-collapse:collapse;color:#e2e8f0;">
+                                            <thead>
+                                                <tr style="border-bottom:2px solid #334155;">
+                                                    <th style="padding:12px;text-align:left;color:#94a3b8;font-weight:600;">Symbol</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Strike</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Exp</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">DTE</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Contracts</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Entry $</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Current $</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">P/L</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Progress</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>${rows}</tbody>
+                                        </table>
+                                    </div>`;
+                            })
+                            .catch(err => {
+                                if (container) container.innerHTML = `<p style="color:#fb923c;text-align:center;padding:20px;">Failed to load positions: ${err.message}</p>`;
+                            });
+                    }
+
+                    function _loadAnalyticsHistory() {
+                        const container = document.getElementById('analytics-history-content');
+                        if (!container) return;
+                        fetch('/api/analytics/history?limit=50')
+                            .then(r => r.json())
+                            .then(resp => {
+                                if (!resp.ok) throw new Error(resp.error || 'Failed');
+                                const trades = resp.data;
+                                if (!trades || trades.length === 0) {
+                                    container.innerHTML = '<p style="color:#94a3b8;text-align:center;padding:20px;">No closed trades recorded in tracker yet. Run a Schwab sync to import history.</p>';
+                                    return;
+                                }
+                                const rows = trades.map(t => {
+                                    const pnl = parseFloat(t['Net Profit $'] || 0);
+                                    const roi = parseFloat(t['ROI %'] || 0);
+                                    const pnlColor = pnl >= 0 ? '#34d399' : '#fb923c';
+                                    const roiColor = roi >= 0 ? '#34d399' : '#fb923c';
+                                    const pnlSign = pnl >= 0 ? '+' : '';
+                                    const roiSign = roi >= 0 ? '+' : '';
+                                    const wl = t['Win/Loss'] || '';
+                                    const badge = wl === 'WIN'
+                                        ? '<span style="background:#10b981;color:white;padding:4px 10px;border-radius:12px;font-size:0.8rem;font-weight:600;">WIN</span>'
+                                        : wl === 'LOSS'
+                                        ? '<span style="background:#ef4444;color:white;padding:4px 10px;border-radius:12px;font-size:0.8rem;font-weight:600;">LOSS</span>'
+                                        : `<span style="background:#6b7280;color:white;padding:4px 10px;border-radius:12px;font-size:0.8rem;">${wl||'N/A'}</span>`;
+                                    return `<tr style="border-bottom:1px solid #334155;">
+                                        <td style="padding:12px;font-weight:600;">${t.Symbol}</td>
+                                        <td style="padding:12px;text-align:right;">$${parseFloat(t.Strike||0).toFixed(2)}</td>
+                                        <td style="padding:12px;text-align:right;font-size:0.85rem;">${t['Entry Date']||'N/A'}</td>
+                                        <td style="padding:12px;text-align:right;font-size:0.85rem;">${t['Exit Date']||'N/A'}</td>
+                                        <td style="padding:12px;text-align:right;">${t['Days Held']||0}</td>
+                                        <td style="padding:12px;text-align:right;color:#34d399;">$${parseFloat(t['Entry Premium']||0).toFixed(2)}</td>
+                                        <td style="padding:12px;text-align:right;color:#60a5fa;">$${parseFloat(t['Exit Premium']||0).toFixed(2)}</td>
+                                        <td style="padding:12px;text-align:right;color:${pnlColor};font-weight:600;">${pnlSign}$${Math.abs(pnl).toFixed(2)}</td>
+                                        <td style="padding:12px;text-align:right;color:${roiColor};font-weight:600;">${roiSign}${Math.abs(roi).toFixed(2)}%</td>
+                                        <td style="padding:12px;text-align:center;">${badge}</td>
+                                    </tr>`;
+                                }).join('');
+                                container.innerHTML = `
+                                    <div style="overflow-x:auto;max-height:500px;overflow-y:auto;">
+                                        <table style="width:100%;border-collapse:collapse;color:#e2e8f0;">
+                                            <thead style="position:sticky;top:0;background:#1e293b;z-index:10;">
+                                                <tr style="border-bottom:2px solid #334155;">
+                                                    <th style="padding:12px;text-align:left;color:#94a3b8;font-weight:600;">Symbol</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Strike</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Entry</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Exit</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Days</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Entry $</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Exit $</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Net P/L</th>
+                                                    <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">ROI%</th>
+                                                    <th style="padding:12px;text-align:center;color:#94a3b8;font-weight:600;">Result</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>${rows}</tbody>
+                                        </table>
+                                    </div>
+                                    <div style="color:#94a3b8;font-size:0.85rem;margin-top:12px;text-align:right;">Showing ${trades.length} closed trades</div>`;
+                            })
+                            .catch(err => {
+                                if (container) container.innerHTML = `<p style="color:#fb923c;text-align:center;padding:20px;">Failed to load history: ${err.message}</p>`;
+                            });
                     }
                     </script>
                 </div>
@@ -5323,6 +5354,11 @@ def generate_html():
                     // Highlight button
                     const activeBtn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
                     if (activeBtn) activeBtn.classList.add('active');
+
+                    // Load live analytics when the Analytics tab is opened
+                    if (tabId === 'analytics' && typeof loadAnalytics === 'function') {
+                        loadAnalytics();
+                    }
                 }
 
                 // On page load: show first tab

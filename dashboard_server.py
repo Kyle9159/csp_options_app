@@ -2035,10 +2035,128 @@ def sync_positions_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _parse_schwab_occ_symbol(occ_symbol):
+    """
+    Parse Schwab OCC option symbol into components.
+    Format: 'AAPL  260319P00150000' (symbol left-padded to 6 chars)
+    Returns dict with symbol, expiration (YYYY-MM-DD), strike (float), or None on failure.
+    """
+    try:
+        if not occ_symbol or len(occ_symbol) < 15:
+            return None
+        from datetime import datetime as _dt
+        underlying = occ_symbol[:6].strip()
+        rest = occ_symbol[6:]
+        exp_date = _dt.strptime(rest[:6], '%y%m%d').date().isoformat()
+        put_call = rest[6]
+        if put_call not in ('P', 'C'):
+            return None
+        strike = int(rest[7:15]) / 1000.0
+        return {'symbol': underlying, 'expiration': exp_date, 'strike': strike, 'put_call': put_call}
+    except Exception:
+        return None
+
+
+def _get_schwab_csp_positions():
+    """
+    Fetch live short PUT positions from Schwab account via positions API.
+    Returns a list of dicts in the same shape as enrich_trade_with_live_data() output.
+    Falls back to an empty list on any error so the caller can try the sheet fallback.
+    """
+    try:
+        import dotenv as _dotenv
+        _dotenv.load_dotenv()
+        from schwab_utils import get_client
+        from datetime import datetime as _dt, date as _date
+
+        paper_trading = os.getenv('PAPER_TRADING', 'True').lower() == 'true'
+        account_id = os.getenv(
+            'SCHWAB_PAPER_ACCOUNT_ID' if paper_trading else 'SCHWAB_LIVE_ACCOUNT_ID'
+        )
+
+        client = get_client()
+        client.set_enforce_enums(False)
+
+        # Resolve account hash
+        acct_numbers = client.get_account_numbers().json()
+        account_hash = next(
+            (a.get('hashValue') for a in acct_numbers if a.get('accountNumber') == account_id),
+            None,
+        )
+        if not account_hash:
+            logger.warning("_get_schwab_csp_positions: no account hash found")
+            return []
+
+        # Fetch positions
+        pos_resp = client.get_account(account_hash, fields='positions')
+        if pos_resp.status_code != 200:
+            logger.warning(f"Schwab positions returned HTTP {pos_resp.status_code}")
+            return []
+
+        positions = pos_resp.json().get('securitiesAccount', {}).get('positions', [])
+
+        rows = []
+        for pos in positions:
+            instrument = pos.get('instrument', {})
+            if instrument.get('assetType') != 'OPTION':
+                continue
+            if instrument.get('putCall') != 'PUT':
+                continue
+            short_qty = int(pos.get('shortQuantity', 0))
+            if short_qty <= 0:
+                continue
+
+            occ_symbol = instrument.get('symbol', '')
+            parsed = _parse_schwab_occ_symbol(occ_symbol)
+            if not parsed:
+                continue
+
+            underlying = instrument.get('underlyingSymbol', '') or parsed['symbol']
+            avg_price = float(pos.get('averagePrice', 0))   # premium received per share
+            market_value = float(pos.get('marketValue', 0)) # negative for short position
+
+            exp_date_str = parsed['expiration']
+            strike = parsed['strike']
+
+            dte = max((_date.fromisoformat(exp_date_str) - _date.today()).days, 0)
+
+            # Current mark derived from market value (avoids extra API round-trip)
+            current_mark = abs(market_value) / (short_qty * 100) if short_qty > 0 else 0
+            total_credit = avg_price * short_qty * 100
+            pl_dollars = total_credit - abs(market_value)
+            progress_pct = (pl_dollars / total_credit * 100) if total_credit > 0 else 0
+
+            rows.append({
+                'Symbol': underlying,
+                'Strike': strike,
+                'Exp Date': exp_date_str,
+                'Entry Premium': avg_price,
+                'Contracts Qty': short_qty,
+                'Option Symbol': occ_symbol,
+                '_dte': dte,
+                '_current_premium': round(current_mark, 2),
+                '_pl_dollars': round(pl_dollars, 2),
+                '_progress_pct': round(progress_pct, 1),
+                '_total_credit': round(total_credit, 2),
+                '_daily_theta_decay_dollars': 0.0,
+                '_forward_theta_daily': 0.0,
+                '_projected_decay': 0.0,
+            })
+
+        logger.info(f"Fetched {len(rows)} open short PUT positions from Schwab")
+        return rows
+
+    except Exception as e:
+        logger.error(f"_get_schwab_csp_positions failed: {e}", exc_info=True)
+        return []
+
+
 @app.route('/api/open_csps')
 def get_open_csps():
     """
     Get updated open CSPs data with LIVE market data for dashboard refresh.
+    Primary source: Schwab account positions API.
+    Fallback: Google Sheet + live stock quotes.
 
     Query Parameters:
         force_refresh: If 'true', bypass cache and fetch fresh data
@@ -2048,9 +2166,6 @@ def get_open_csps():
     """
     try:
         logger.info("Open CSPs endpoint called")
-        import asyncio
-        from open_trade_monitor import load_trades_from_sheet, enrich_trade_with_live_data
-        from schwab_utils import get_client
         from datetime import datetime
 
         force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
@@ -2069,47 +2184,55 @@ def get_open_csps():
 
         logger.info(f"Fetching fresh Open CSPs data (force_refresh={force_refresh})")
 
-        # Load trades from sheet
-        logger.info("Loading trades from sheet...")
-        df, _ = load_trades_from_sheet()
-        if df is None or df.empty:
-            logger.warning("No trades loaded from sheet")
-            return jsonify({'csps': [], 'summary': {}, 'last_updated': datetime.now().isoformat()})
+        # --- Primary: Schwab account positions ---
+        enriched_rows = _get_schwab_csp_positions()
+        data_source = 'schwab'
 
-        # Get unique symbols to fetch quotes for
-        symbols = df['Symbol'].dropna().unique().tolist()
-
-        # Fetch live quotes from Schwab API
-        quotes = {}
-        if symbols:
+        # --- Fallback: Google Sheet + live quote enrichment ---
+        if not enriched_rows:
+            logger.info("Schwab positions empty — falling back to Google Sheet")
             try:
-                client = get_client()
-                quote_resp = client.get_quotes(symbols)
-                if quote_resp.status_code == 200:
-                    quote_data = quote_resp.json()
-                    for sym, data in quote_data.items():
-                        if 'quote' in data:
-                            quotes[sym] = {
-                                'lastPrice': data['quote'].get('lastPrice', 0),
-                                'bidPrice': data['quote'].get('bidPrice', 0),
-                                'askPrice': data['quote'].get('askPrice', 0),
-                                'mark': data['quote'].get('mark', data['quote'].get('lastPrice', 0)),
-                            }
-                    logger.info(f"Fetched live quotes for {len(quotes)} symbols")
-            except Exception as e:
-                logger.warning(f"Failed to fetch quotes: {e}")
+                import asyncio
+                from open_trade_monitor import load_trades_from_sheet, enrich_trade_with_live_data
+                from schwab_utils import get_client
 
-        # Enrich data with live market info
-        enriched_rows = []
-        for _, row in df.iterrows():
-            enriched = enrich_trade_with_live_data(dict(row), quotes)
-            # Convert any date objects to strings for JSON serialization
-            for key, value in enriched.items():
-                if hasattr(value, 'strftime'):
-                    enriched[key] = value.strftime('%Y-%m-%d')
-                elif hasattr(value, 'isoformat'):
-                    enriched[key] = value.isoformat()
-            enriched_rows.append(enriched)
+                df, _ = load_trades_from_sheet()
+                if df is not None and not df.empty:
+                    symbols = df['Symbol'].dropna().unique().tolist()
+                    quotes = {}
+                    if symbols:
+                        try:
+                            client = get_client()
+                            quote_resp = client.get_quotes(symbols)
+                            if quote_resp.status_code == 200:
+                                for sym, data in quote_resp.json().items():
+                                    if 'quote' in data:
+                                        q = data['quote']
+                                        quotes[sym] = {
+                                            'lastPrice': q.get('lastPrice', 0),
+                                            'bidPrice': q.get('bidPrice', 0),
+                                            'askPrice': q.get('askPrice', 0),
+                                            'mark': q.get('mark', q.get('lastPrice', 0)),
+                                        }
+                        except Exception as qe:
+                            logger.warning(f"Sheet fallback quote fetch failed: {qe}")
+
+                    for _, row in df.iterrows():
+                        enriched = enrich_trade_with_live_data(dict(row), quotes)
+                        for key, value in enriched.items():
+                            if hasattr(value, 'strftime'):
+                                enriched[key] = value.strftime('%Y-%m-%d')
+                            elif hasattr(value, 'isoformat'):
+                                enriched[key] = value.isoformat()
+                        enriched_rows.append(enriched)
+                    data_source = 'sheet'
+            except Exception as fe:
+                logger.error(f"Sheet fallback also failed: {fe}")
+
+        if not enriched_rows:
+            logger.warning("No trades found from Schwab or Sheet")
+            return jsonify({'csps': [], 'summary': {}, 'last_updated': datetime.now().isoformat(),
+                            'data_source': 'none'})
 
         # Calculate summary statistics
         total_credit = sum(float(r.get('_total_credit', 0) or 0) for r in enriched_rows)
@@ -2139,7 +2262,7 @@ def get_open_csps():
             'csps': enriched_rows,
             'summary': summary,
             'last_updated': last_updated,
-            'quotes_fetched': len(quotes)
+            'data_source': data_source,
         }
 
         # Cache the response
@@ -2155,6 +2278,89 @@ def get_open_csps():
     except Exception as e:
         logger.error(f"Failed to get open CSPs: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+
+# ==================== ANALYTICS API ====================
+
+@app.route('/api/analytics/summary')
+def get_analytics_summary():
+    """
+    Aggregate trade performance stats from SQLite trade outcome tracker.
+    Uses last 90 days of closed trades by default.
+    """
+    try:
+        from trade_outcome_tracker import get_trade_stats
+        days = int(request.args.get('days', 90))
+        stats = get_trade_stats(days=days)
+
+        # Augment with live Schwab position count
+        live_positions = _get_schwab_csp_positions()
+        if live_positions:
+            stats['open_count'] = len(live_positions)
+
+        return jsonify({'ok': True, 'data': stats})
+    except Exception as e:
+        logger.error(f"Analytics summary failed: {e}", exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analytics/history')
+def get_analytics_history():
+    """
+    Recent closed trades from SQLite trade outcome tracker.
+    Returns records formatted for the Analytics Trade History table.
+    """
+    try:
+        from trade_outcome_tracker import get_recent_trades
+        limit = int(request.args.get('limit', 50))
+        trades = get_recent_trades(limit=limit)
+
+        # Normalise fields to match the expected Analytics table shape
+        formatted = []
+        for t in trades:
+            if t.get('outcome') == 'open':
+                continue  # open trades shown separately
+            pnl = float(t.get('pnl') or 0)
+            outcome = t.get('outcome', '')
+            win_loss = (
+                'WIN' if outcome in ('expired_worthless', 'closed_profit') else
+                'LOSS' if outcome in ('closed_loss', 'assigned') else
+                outcome.upper()
+            )
+            formatted.append({
+                'Symbol': t.get('symbol', ''),
+                'Strike': t.get('strike', 0),
+                'Entry Date': t.get('entry_date', ''),
+                'Exit Date': t.get('exit_date', ''),
+                'Days Held': t.get('holding_days', 0),
+                'Entry Premium': t.get('entry_premium', 0),
+                'Exit Premium': t.get('exit_premium', 0),
+                'Net Profit $': pnl,
+                'ROI %': t.get('pnl_pct', 0),
+                'Win/Loss': win_loss,
+                'outcome': outcome,
+                'regime': t.get('regime', ''),
+                'grok_score': t.get('grok_trade_score', 0),
+            })
+
+        return jsonify({'ok': True, 'data': formatted, 'count': len(formatted)})
+    except Exception as e:
+        logger.error(f"Analytics history failed: {e}", exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analytics/open')
+def get_analytics_open():
+    """
+    Live open short PUT positions from Schwab for the Analytics Open Trades table.
+    Mirrors /api/open_csps but without the summary block, for lightweight use in analytics.
+    """
+    try:
+        positions = _get_schwab_csp_positions()
+        return jsonify({'ok': True, 'data': positions, 'count': len(positions)})
+    except Exception as e:
+        logger.error(f"Analytics open positions failed: {e}", exc_info=True)
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 # ==================== PHASE 4: OPTIONS CHAIN HEATMAP API ====================
