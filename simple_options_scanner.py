@@ -75,6 +75,10 @@ ET_TZ = pytz.timezone('US/Eastern')
 caputured_opportunities = []
 
 # ==================== SYMBOL TIERS ====================
+# Tier 1: Wheel-grade blue chips — stocks you'd be happy to own if assigned
+# Tier 2: Quality growth — higher volatility but institutional backing
+# Removed: leveraged ETFs (TQQQ/SOXL — structural decay), crypto miners (MARA/RIOT/IREN — BTC-correlated),
+#          duplicate symbols across tiers, ultra-speculative names (CCCX, BMNR)
 TIER_1_SYMBOLS = [
     # Dividend Aristocrats & Blue Chips
     'KO', 'JNJ', 'PG', 'WMT', 'VZ', 'MRK', 'BMY', 'ABBV', 'PEP', 'CL', 'KMB',
@@ -83,17 +87,17 @@ TIER_1_SYMBOLS = [
     # REITs & Stable Income
     'O', 'STAG', 'SPG',
     # Retail & Consumer
-    'HD', 'LOW', 'TGT', 'COST', 'WMT', 'TJX',
+    'HD', 'LOW', 'TGT', 'COST', 'TJX',
     # Brands & Consumer Discretionary
     'NKE', 'DIS', 'SBUX', 'MCD',
     # Industrials
     'CAT', 'DE', 'HON', 'MMM', 'BA', 'RTX', 'LMT', 'GD', 'NOC',
     # Healthcare & Insurance
-    'UNH', 'CVS', 'CI', 'HUM', 'ABBV', 'AMGN', 'GILD',
+    'UNH', 'CVS', 'CI', 'HUM', 'AMGN', 'GILD',
     # Major ETFs
     'SPY', 'QQQ', 'IWM', 'DIA', 'VOO', 'VTI', 'SCHD', 'JEPI', 'JEPQ',
     # Mega Cap Tech
-    'AAPL', 'MSFT', 'NVDA', 'AMD', 'META', 'AMZN', 'GOOGL', 'GOOG', 'NFLX', 'AVGO',
+    'AAPL', 'MSFT', 'NVDA', 'AMD', 'META', 'AMZN', 'GOOGL', 'NFLX', 'AVGO',
     # Financials
     'JPM', 'BAC', 'WFC', 'USB', 'PNC', 'TFC', 'BLK', 'GS', 'MS', 'SCHW', 'AXP', 'V', 'MA',
     # Telecom & Utilities
@@ -117,36 +121,31 @@ TIER_2_SYMBOLS = [
     # Pharma & Biotech
     'PFE', 'LLY', 'NVO', 'AZN', 'REGN', 'VRTX', 'BIIB', 'MRNA', 'BNTX',
     # Communication & Collaboration
-    'ZM', 'TWLO', 'DOCN', 'U', 'ASAN',
+    'ZM', 'TWLO', 'DOCN', 'U',
     # Consumer & Restaurant
     'CMG', 'YUM', 'QSR', 'DPZ', 'WING', 'CAVA',
     # Logistics & Transportation
     'UPS', 'FDX', 'ODFL', 'XPO', 'JBHT',
     # Healthcare Services & Distribution
-    'MCK', 'CAH', 'ABC', 'TDOC', 'VEEV',
-    # International Tech
-    'BABA', 'PDD', 'JD', 'SE',
-    # Fintech & Crypto
-    'PYPL', 'SQ', 'COIN', 'HOOD', 'SOFI', 'AFRM',
+    'MCK', 'CAH', 'ABC', 'VEEV',
+    # Fintech
+    'PYPL', 'SQ', 'COIN', 'SOFI',
     # Entertainment & Gaming
     'RBLX', 'DKNG', 'PINS',
     # Growth Tech
-    'PLTR', 'ROKU', 'DASH', 'ABNB', 'UBER', 'LYFT',
+    'PLTR', 'ROKU', 'DASH', 'ABNB', 'UBER',
     # Energy & Resources
-    'XLE', 'OXY', 'HAL', 'SLB', 'FCX', 'CLF', 'APA', 'BP', 'EOG', 'DVN', 'FANG',
+    'XLE', 'OXY', 'HAL', 'SLB', 'FCX', 'CLF', 'BP', 'EOG', 'DVN', 'FANG',
     # Regional Banks
     'CFG', 'FITB', 'KEY', 'RF', 'ZION', 'HBAN', 'MTB',
-    # Leveraged ETFs (Higher Risk)
-    'TQQQ', 'SOXL', 'TDAQ',
-    # Emerging Growth
-    'NBIS', 'HIMS', 'OKLO', 'SMR', 'URA', 'BMNR', 'IONQ', 'RDDT', 'ARM'
+    # Growth / Nuclear
+    'HIMS', 'OKLO', 'SMR', 'URA', 'IONQ', 'RDDT', 'ARM'
 ]
 
 TIER_3_SYMBOLS = [
-    'COIN', 'HOOD', 'SOFI', 'RBLX', 'ABNB', 'UBER', 'DKNG', 'PINS', 'F',
-    'NEM', 'VALE', 'DVN', 'COP', 'EOG', 'EXPE', 'NCLH', 'CCL', 'ENPH', 
-    'FSLR', 'BNTX', 'TSLA', 'MARA', 'RIOT', 'RIVN', 'IREN', 'CCCX',
-    'GM', 'LUV', 'MAR', 'RCL'
+    # Higher risk — only scanned in STRONG_BULL regime
+    'HOOD', 'F', 'NEM', 'VALE', 'EXPE', 'NCLH', 'CCL', 'ENPH',
+    'FSLR', 'TSLA', 'RIVN', 'GM', 'LUV', 'MAR', 'RCL'
 ]
 
 SIMPLE_WATCHLIST = TIER_1_SYMBOLS + TIER_2_SYMBOLS + TIER_3_SYMBOLS
@@ -198,7 +197,15 @@ REGIME_SETTINGS = {
 # Loosened global filters
 MIN_PREMIUM = 0.20  # Was higher
 MIN_ANNUALIZED = 12  # Lower threshold
-OTM_BUFFER_PCT = 0.95
+# OTM buffer is now regime-dependent — see _get_otm_buffer()
+OTM_BUFFER_PCT_DEFAULT = 0.92  # 8% OTM minimum (was 0.95 / 5%)
+OTM_BUFFER_BY_REGIME = {
+    'STRONG_BULL': 0.95,       # 5% OTM — looser in strong bull
+    'MILD_BULL': 0.93,         # 7% OTM
+    'NEUTRAL_OR_WEAK': 0.92,   # 8% OTM
+    'CAUTIOUS': 0.90,          # 10% OTM — tighter in cautious
+    'BEARISH_HIGH_VOL': 0.88,  # 12% OTM — most conservative
+}
 
 # ==================== TELEGRAM ====================
 SIMPLE_OPTIONS_SCANNER_TELEGRAM_TOKEN = os.getenv('SIMPLE_OPTIONS_SCANNER_TELEGRAM_TOKEN')
@@ -240,11 +247,21 @@ async def get_current_regime():
         current_price = spy['Close'].iloc[-1]
         sma200 = spy['SMA200'].iloc[-1]
 
+        # VIX term structure: VIX > VIX3M (backwardation) = genuine fear signal
+        vix_backwardation = False
+        try:
+            vix3m = yf.Ticker("^VIX3M").history(period="5d")['Close'].iloc[-1]
+            vix_backwardation = vix > vix3m
+            if vix_backwardation:
+                print(f"   VIX term structure: BACKWARDATION (VIX {vix:.1f} > VIX3M {vix3m:.1f}) — elevated fear")
+        except Exception:
+            pass  # VIX3M data not always available
+
         if vix > 35:
             return "BEARISH_HIGH_VOL"
-        elif vix > 25:
+        elif vix > 25 or (vix > 20 and vix_backwardation):
             return "CAUTIOUS"
-        elif current_price > sma200 * 1.05:
+        elif current_price > sma200 * 1.05 and not vix_backwardation:
             return "STRONG_BULL"
         elif current_price > sma200:
             return "MILD_BULL"
@@ -683,7 +700,7 @@ def calculate_support_resistance(symbol, period="2y", force_refresh=False):
 
     
 # ==================== CORE SCANNER ====================
-def find_high_probability_options(symbol, current_price, tier, regime, grok_sentiment):
+def find_high_probability_options(symbol, current_price, tier, regime, grok_sentiment, regime_key='MILD_BULL'):
     opportunities = []
     
     try:
@@ -704,6 +721,9 @@ def find_high_probability_options(symbol, current_price, tier, regime, grok_sent
         delta_min = regime["delta_min"] + (0.05 if is_grok_bull else 0)
         delta_max = regime["delta_max"] + (0.05 if is_grok_bull else 0)
 
+        # Regime-dependent OTM buffer
+        otm_buffer = OTM_BUFFER_BY_REGIME.get(regime_key, OTM_BUFFER_PCT_DEFAULT)
+
         for exp_key, strikes in chain_resp['putExpDateMap'].items():
             try:
                 dte = int(exp_key.split(':')[1])
@@ -722,7 +742,7 @@ def find_high_probability_options(symbol, current_price, tier, regime, grok_sent
                     if capital_needed > MAX_CAPITAL_PER_TRADE:
                         continue
 
-                    if strike > current_price * OTM_BUFFER_PCT: continue
+                    if strike > current_price * otm_buffer: continue
 
                     bid = float(opt.get('bidPrice', 0) or 0)
                     ask = float(opt.get('askPrice', 0) or 0)
@@ -947,7 +967,9 @@ def improved_put_score(premium, delta, dte, annualized_roi, iv, vol_surge, rsi, 
              distance_mult * tier_mult * sr_mult * regime_mult * capital_mult *
              rebound_mult * quality_mult * liquidity_mult * macd_mult * rs_mult)
 
-    final_score = (score * 8 + annualized_roi * 2) / 2
+    # Safety-first: score is pure multiplier output, annualized ROI is a minor bonus
+    # (was: score * 8 + annualized_roi * 2) / 2 — gave too much weight to raw yield)
+    final_score = score * 5 + min(annualized_roi * 0.3, 15)
     return final_score
 
 # ==================== MAIN ====================
@@ -1081,7 +1103,13 @@ async def main():
             # We'll get IV from first opportunity later, for now pass None
             passes_quality, quality_signals = check_quality_filters(sym, hist_df, current_iv=None)
 
-            opps = find_high_probability_options(sym, price, get_symbol_tier(sym), regime, grok_sentiment)
+            # P1: Hard-block trades with earnings < 7 DTE
+            days_to_earnings = quality_signals.get('days_to_earnings')
+            if days_to_earnings is not None and days_to_earnings < 7:
+                print(f" → Earnings in {days_to_earnings} days — BLOCKED")
+                return []
+
+            opps = find_high_probability_options(sym, price, get_symbol_tier(sym), regime, grok_sentiment, regime_key=regime_key)
 
             if not opps:
                 return []  # No opportunities → skip S/R fetch entirely
@@ -1232,20 +1260,20 @@ async def main():
             Grok Sentiment: {grok_sentiment.replace('_', ' ')}
 
             KEY PRIORITIES (in rough order of importance):
-                1. Premium yield + Annualized ROI (higher = much better)
-                2. Safety:
+                1. Safety (MOST IMPORTANT for profit retention):
                     - Lower delta: BEST = .20-.30 delta, GOOD = .31-.37 delta, PENALIZE > .38 delta
-                    - Further OTM distance: BEST = 10% and Above OTM %, GOOD = 5% - 9.9% OTM %, PENALIZE < 4.9 OTM %
-                    - strike well below support
+                    - Further OTM distance: BEST = 10%+ OTM, GOOD = 7%-9.9% OTM, PENALIZE < 7% OTM
+                    - Strike well below 3-month support level
+                    - Earnings > 14 days away (< 14 days = major penalty, < 7 days = reject)
+                2. Premium yield + Annualized ROI (reward but never at expense of safety)
                 3. DTE: BEST = 25–45 days (peak score), GOOD = 14-25 or 46–60 days, PENALIZE <14 or >60 days
                 4. IV: BEST = 60–100% (high premium without extreme risk), GOOD = 50–60% or 100–120%, PENALIZE <40% (low yield) or >130% (meme/crash risk)
                 5. IV Premium: BONUS if IV > HV by 20%+ (selling overpriced options)
                 6. RSI: Lower/oversold = better entry (bonus if <50)
                 7. Rebound Score: Higher = better timing (10+/15 = excellent, 7-9/15 = good)
-                8. Tier 1 stocks preferred, followed by Tier 2; Tier 3 only in strong bullish regimes, strong premium, and safe setups
+                8. Tier 1 stocks preferred, followed by Tier 2; Tier 3 only in strong bullish regimes with safe setups
                 9. S/R Risk: "Low (well below 3m support)" = big boost, "High" = penalty
                 10. Quality Warnings:
-                    - Earnings within 14 days = HIGH RISK (major penalty)
                     - Stock < 20% above 52w low = falling knife risk (penalty)
                 11. Liquidity: Higher OI (500+) and tighter spread (<5%) = better execution
                 12. MACD: Bullish crossover or turning positive = momentum bonus
@@ -1464,13 +1492,13 @@ async def main():
     top_opps.sort(key=lambda x: x.get('grok_trade_score', 0), reverse=True)
 
     # === FILTER: Only keep opportunities with Grok score >= 80 ===
-    high_conviction_opps = [opp for opp in top_opps if opp.get('grok_trade_score', 0) >= 75]
+    high_conviction_opps = [opp for opp in top_opps if opp.get('grok_trade_score', 0) >= 80]
 
     print(f"After filtering >=80: {len(high_conviction_opps)} high-conviction opportunities")
 
     if not high_conviction_opps:
-        print("No opportunities scored 80 or higher — keeping top 20 for reference")
-        high_conviction_opps = top_opps[:30]  # Fallback so dashboard isn't empty
+        print("No opportunities scored 80+ — keeping top 10 for reference")
+        high_conviction_opps = top_opps[:10]  # Small fallback; empty = don't trade today
 
     # Assign overall_rank to filtered list
     for i, opp in enumerate(high_conviction_opps, 1):
@@ -1567,6 +1595,14 @@ async def main():
             print(f"Cached {len(clean_tiles)} cleaned opportunities")
         except Exception as e2:
             print(f"Clean cache also failed: {e2}")
+
+    # Log recommendations to trade outcome tracker
+    try:
+        from trade_outcome_tracker import log_recommendations
+        logged = log_recommendations(scanner_tiles, regime_key)
+        print(f"📝 Logged {logged} recommendations to trade journal")
+    except Exception as e:
+        print(f"Trade journal logging failed: {e}")
     
     
 def export_to_csv(opportunities, scan_time):

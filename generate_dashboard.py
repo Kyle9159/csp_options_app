@@ -2178,7 +2178,7 @@ def generate_html():
         </head>
         <body>
             <div style="position:fixed; top:12px; left:12px; z-index:9999;">
-            <button onclick="refreshDashboard()" 
+                <button onclick="refreshDashboard(this)" 
                     style="padding:12px 20px; background:#dc2626; color:white; border:none; border-radius:12px; cursor:pointer; font-weight:bold; box-shadow:0 4px 15px rgba(0,0,0,0.4);">
                 🔄 Refresh Dashboard
             </button>
@@ -5742,12 +5742,48 @@ def generate_html():
                     }
                 });
 
-                async function refreshDashboard() {
+                let refreshPollTimer = null;
+
+                async function checkRefreshStatus(btn) {
+                    try {
+                        const resp = await fetch('/api/refresh_status');
+                        const data = await resp.json();
+
+                        if (data.state === 'running') {
+                            btn.disabled = true;
+                            btn.innerHTML = `Refreshing... ${Math.round(data.elapsed_seconds || 0)}s`;
+                            refreshPollTimer = setTimeout(() => checkRefreshStatus(btn), 4000);
+                            return;
+                        }
+
+                        if (data.state === 'completed') {
+                            refreshPollTimer = null;
+                            btn.innerHTML = 'Reloading...';
+                            location.reload();
+                            return;
+                        }
+
+                        if (data.state === 'failed') {
+                            refreshPollTimer = null;
+                            alert(data.message || 'Refresh failed. Check /tmp/csp-generate.log');
+                        }
+                    } catch (e) {
+                        refreshPollTimer = null;
+                        alert('Unable to check refresh status.');
+                        console.error(e);
+                    } finally {
+                        if (refreshPollTimer === null) {
+                            btn.disabled = false;
+                            btn.innerHTML = '🔄 Refresh Dashboard';
+                        }
+                    }
+                }
+
+                async function refreshDashboard(btn) {
                     if (!confirm("Refresh the entire dashboard?\nThis will re-run all bots and regenerate the page.")) {
                         return;
                     }
 
-                    const btn = event.target;
                     btn.disabled = true;
                     btn.innerHTML = "Refreshing...";
 
@@ -5756,18 +5792,18 @@ def generate_html():
                         const data = await resp.json();
                         alert(data.status || "Refresh triggered!");
 
-                        // Auto-reload after delay
-                        setTimeout(() => {
-                            location.reload();
-                        }, 5000);
+                        if (data.state === 'started' || data.state === 'running') {
+                            refreshPollTimer = setTimeout(() => checkRefreshStatus(btn), 3000);
+                            return;
+                        }
                     } catch (e) {
                         alert("Refresh failed — check server");
                         console.error(e);
                     } finally {
-                        setTimeout(() => {
+                        if (!refreshPollTimer) {
                             btn.disabled = false;
                             btn.innerHTML = "🔄 Refresh Dashboard";
-                        }, 10000);
+                        }
                     }
                 }
 

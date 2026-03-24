@@ -67,6 +67,9 @@ MIRROR_CACHE_TIME = 300  # 5 minutes cache
 
 app = Flask(__name__, static_folder='.')
 progress_tracker = {}
+_refresh_process = None
+_refresh_started_at = None
+_refresh_log_path = '/tmp/csp-generate.log'
 
 env = Environment(loader=FileSystemLoader('.'))
 env.filters['safe_float'] = safe_float
@@ -1020,20 +1023,64 @@ def refresh_dashboard():
     """Spawn generate_dashboard.py as a subprocess so it gets a fresh Python
     interpreter — avoids any module-level import state issues in the server."""
     import subprocess, sys
+    global _refresh_process, _refresh_started_at
     try:
+        if _refresh_process is not None and _refresh_process.poll() is None:
+            return {
+                "status": "Dashboard refresh already running.",
+                "state": "running",
+            }
+
         python = sys.executable
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'generate_dashboard.py')
-        subprocess.Popen(
+        log_handle = open(_refresh_log_path, 'a')
+        _refresh_process = subprocess.Popen(
             [python, script],
             cwd=os.path.dirname(os.path.abspath(__file__)),
-            stdout=open('/tmp/csp-generate.log', 'a'),
+            stdout=log_handle,
             stderr=subprocess.STDOUT,
         )
+        _refresh_started_at = time.time()
         logger.info("Dashboard regeneration started as subprocess — see /tmp/csp-generate.log")
-        return {"status": "Dashboard refresh started! New data in ~2 minutes. Reload the page when done."}
+        return {
+            "status": "Dashboard refresh started. This can take 1-3 minutes.",
+            "state": "started",
+        }
     except Exception as e:
         logger.error(f"refresh_dashboard failed: {e}")
         return {"status": f"Refresh failed: {str(e)}"}, 500
+
+
+@app.get("/api/refresh_status")
+def refresh_dashboard_status():
+    global _refresh_process, _refresh_started_at
+
+    if _refresh_process is None:
+        return jsonify({
+            'state': 'idle',
+            'message': 'No dashboard refresh has been started.'
+        })
+
+    return_code = _refresh_process.poll()
+    elapsed = round(time.time() - (_refresh_started_at or time.time()), 1)
+
+    if return_code is None:
+        return jsonify({
+            'state': 'running',
+            'elapsed_seconds': elapsed,
+            'message': f'Dashboard refresh running for {elapsed:.1f}s.'
+        })
+
+    state = 'completed' if return_code == 0 else 'failed'
+    message = 'Dashboard refresh completed. Reloading page.' if return_code == 0 else f'Dashboard refresh failed with exit code {return_code}. Check /tmp/csp-generate.log.'
+
+    _refresh_process = None
+    _refresh_started_at = None
+    return jsonify({
+        'state': state,
+        'exit_code': return_code,
+        'message': message,
+    })
 
 # One-off wheel scan (since wheel_alert_loop is infinite)
 # async def one_wheel_scan():
@@ -3329,6 +3376,61 @@ def auth_callback():
         </body></html>""", 500
 
 
+# ==================== TRADE JOURNAL ROUTES ====================
+
+@app.route('/api/trade_journal/stats')
+def api_trade_journal_stats():
+    """Get aggregate trade statistics."""
+    try:
+        from trade_outcome_tracker import get_trade_stats
+        days = request.args.get('days', 90, type=int)
+        stats = get_trade_stats(days)
+        return jsonify({'ok': True, 'data': stats})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route('/api/trade_journal/recent')
+def api_trade_journal_recent():
+    """Get recent trades."""
+    try:
+        from trade_outcome_tracker import get_recent_trades
+        limit = request.args.get('limit', 20, type=int)
+        trades = get_recent_trades(limit)
+        return jsonify({'ok': True, 'data': trades})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route('/api/trade_journal/open')
+def api_trade_journal_open():
+    """Get open trades."""
+    try:
+        from trade_outcome_tracker import get_open_trades
+        trades = get_open_trades()
+        return jsonify({'ok': True, 'data': trades})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route('/api/trade_journal/sync')
+def api_trade_journal_sync():
+    """Trigger Schwab API sync for trade outcomes."""
+    try:
+        from trade_outcome_tracker import sync_from_schwab
+        result = sync_from_schwab()
+        return jsonify({'ok': True, 'data': result})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route('/api/trade_journal/score_vs_outcome')
+def api_trade_journal_calibration():
+    """Score vs outcome analysis for calibration."""
+    try:
+        from trade_outcome_tracker import get_score_vs_outcome
+        data = get_score_vs_outcome()
+        return jsonify({'ok': True, 'data': data})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     logger.info("=" * 60)
     logger.info("DASHBOARD SERVER STARTING")
@@ -3358,6 +3460,13 @@ if __name__ == '__main__':
     logger.info("  GET  /api/risk/margin              - Margin requirements & BP")
     logger.info("  GET  /api/risk/report              - Full risk report")
     logger.info("  POST /api/grok_compare             - Compare two opportunities with Grok AI")
+    logger.info("")
+    logger.info("Trade Journal:")
+    logger.info("  GET  /api/trade_journal/stats       - Aggregate trade stats (win rate, PnL)")
+    logger.info("  GET  /api/trade_journal/recent      - Recent trades")
+    logger.info("  GET  /api/trade_journal/open        - Open trades")
+    logger.info("  GET  /api/trade_journal/sync        - Manual Schwab sync trigger")
+    logger.info("  GET  /api/trade_journal/score_vs_outcome - Score calibration data")
     logger.info("")
     logger.info("Improvements:")
     logger.info("  - Parallel scanner execution (2-3x faster)")
@@ -3401,6 +3510,36 @@ if __name__ == '__main__':
     # Run immediately on startup, then every 12 hours
     threading.Timer(30, _check_token_and_alert).start()  # 30s delay so server is ready first
     logger.info("Schwab token expiry check scheduled (every 12 hours, Telegram alert if <= 2 days remain)")
+
+    # --- Schwab trade sync (runs every 4 hours during market hours) ---
+    def _scheduled_schwab_sync():
+        """Sync trade outcomes from Schwab API on a recurring schedule."""
+        try:
+            now_et = datetime.now(ET_TZ)
+            hour = now_et.hour
+            weekday = now_et.weekday()  # 0=Mon, 6=Sun
+
+            # Only sync Mon-Fri, 6am-8pm ET (covers pre-market through post-close)
+            if weekday < 5 and 6 <= hour <= 20:
+                from trade_outcome_tracker import sync_from_schwab
+                result = sync_from_schwab()
+                if result.get('success'):
+                    logger.info(
+                        f"Scheduled Schwab sync: {result.get('trades_created', 0)} new, "
+                        f"{result.get('trades_closed', 0)} closed"
+                    )
+                else:
+                    logger.warning(f"Scheduled Schwab sync failed: {result.get('error', 'unknown')}")
+            else:
+                logger.debug("Schwab sync skipped (outside market hours)")
+        except Exception as e:
+            logger.warning(f"Scheduled Schwab sync error: {e}")
+        finally:
+            threading.Timer(4 * 3600, _scheduled_schwab_sync).start()
+
+    # Start after 60s so server and auth are ready
+    threading.Timer(60, _scheduled_schwab_sync).start()
+    logger.info("Schwab trade sync scheduled (every 4 hours, Mon-Fri 6am-8pm ET)")
 
     # Production-ready configuration
     # For development, use Flask dev server

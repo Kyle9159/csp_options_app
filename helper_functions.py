@@ -190,6 +190,9 @@ def calculate_trade_score(opportunity):
     Calculate a composite trade score (0-100) blending quantitative heuristics
     with Grok's AI probability when available.
 
+    Used by: generate_dashboard.py for dashboard trade tiles.
+    Note: The scanner (simple_options_scanner.py) uses improved_put_score() + batch Grok scoring instead.
+
     Weights:
       - Grok AI probability:  40 pts  (if available, else heuristics expand)
       - Premium quality:      15 pts
