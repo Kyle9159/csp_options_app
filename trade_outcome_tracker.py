@@ -113,8 +113,55 @@ def init_db():
                 ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_occ
                 ON trades(occ_symbol);
+
+            CREATE TABLE IF NOT EXISTS regime_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                regime_key TEXT NOT NULL,
+                logged_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_regime_log_at
+                ON regime_log(logged_at DESC);
         """)
     logger.info("Trade outcome DB initialized")
+
+
+# ==================== REGIME LOGGING ====================
+
+def log_regime_change(regime_key: str) -> None:
+    """
+    Log the current regime if it differs from the most recent entry.
+    Only records a new row when the regime actually changes so the history
+    table stays compact and meaningful (one row = one regime period).
+    """
+    with get_db() as conn:
+        last = conn.execute(
+            "SELECT regime_key FROM regime_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if last and last["regime_key"] == regime_key:
+            return  # No change — skip
+        conn.execute(
+            "INSERT INTO regime_log (regime_key) VALUES (?)", (regime_key,)
+        )
+    logger.info("Logged regime change: %s", regime_key)
+
+
+def get_regime_history(limit: int = 60) -> list[dict]:
+    """
+    Return the most recent regime log entries (newest first).
+
+    Args:
+        limit: Maximum number of rows to return.
+
+    Returns:
+        List of dicts with keys: id, regime_key, logged_at.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, regime_key, logged_at FROM regime_log ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ==================== RECOMMENDATION LOGGING ====================

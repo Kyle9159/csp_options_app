@@ -25,9 +25,10 @@ PROFIT_TARGET_PCT = 0.60  # Close at 60% of credit
 MIN_CREDIT_RATIO = 0.15  # Lowered min credit ratio for more opportunities
 
 # Expanded underlyings with daily (Mon-Fri) 0DTE options as of Jan 2026
+# Note: TQQQ/SOXL/SPXL removed — leveraged ETF structural decay misprices 0DTE vol
 UNDERLYINGS = ['SPX', 'SPY', 'QQQ', 'QQQM', 'IWM', 'TSLA', 'NVDA', 'AAPL', 
                'META', 'MSFT', 'AMZN', 'GOOGL', 'NFLX', 'AMD', 'DIA', 'VXX', 'JPM', 'BAC', 'DIS',
-               'PYPL', 'CRM', 'ADBE', 'INTC', 'XLE', 'TQQQ', 'SOXL', 'SPXL']
+               'PYPL', 'CRM', 'ADBE', 'INTC', 'XLE']
 
 SHORT_DELTA_TARGET = (0.05, 0.25)  # Relaxed short delta per side for more opportunities
 MIN_PREMIUM_PER_SIDE = 0.25  # Lowered minimum premium

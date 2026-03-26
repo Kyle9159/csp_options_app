@@ -100,6 +100,9 @@ def _scan_trade_for_alerts(trade: Dict[str, Any]) -> List[Dict[str, Any]]:
         # P/L alerts
         alerts.extend(_check_pl_alerts(trade))
 
+        # Roll candidate alerts
+        alerts.extend(_check_roll_alerts(trade))
+
     except Exception as e:
         logger.error(f"Error scanning trade {symbol}: {e}")
 
@@ -389,6 +392,44 @@ def _check_pl_alerts(trade: Dict[str, Any]) -> List[Dict[str, Any]]:
             'symbol': symbol,
             'message': f"⚠️ {symbol} - Significant loss: {pl_pct:.1f}%",
             'pl_pct': pl_pct
+        })
+
+    return alerts
+
+
+def _check_roll_alerts(trade: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Check if a trade is a roll candidate based on delta, DTE, and P/L."""
+    alerts = []
+    symbol = trade.get('Symbol', 'Unknown')
+    delta = abs(safe_float(trade.get('Delta', 0)))
+    dte = safe_int(trade.get('DTE', 99))
+    pl_pct = safe_float(trade.get('Current P/L %', 0))
+
+    if delta > 0.45 and dte > 7 and pl_pct < 0:
+        alerts.append({
+            'priority': 'HIGH',
+            'type': 'ROLL',
+            'symbol': symbol,
+            'message': (
+                f"🔄 {symbol} — ROLL CANDIDATE: delta {delta:.2f} (>0.45), "
+                f"{dte} DTE, P/L {pl_pct:.1f}% — consider rolling out and/or down"
+            ),
+            'delta': delta,
+            'dte': dte,
+            'pl_pct': pl_pct,
+        })
+    elif 0.38 < delta <= 0.45 and dte < 21 and pl_pct < 0:
+        alerts.append({
+            'priority': 'MEDIUM',
+            'type': 'ROLL',
+            'symbol': symbol,
+            'message': (
+                f"⏳ {symbol} — Roll window closing: delta {delta:.2f}, "
+                f"{dte} DTE, P/L {pl_pct:.1f}% — monitor closely for roll opportunity"
+            ),
+            'delta': delta,
+            'dte': dte,
+            'pl_pct': pl_pct,
         })
 
     return alerts

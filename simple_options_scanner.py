@@ -42,6 +42,7 @@ from telegram import Bot as telegram_bot
 from grok_utils import get_grok_opportunity_analysis, get_grok_sentiment_cached, parse_grok_batch_response
 from helper_functions import save_cached_scanner, load_sr_cache, save_sr_cache
 from schwab_utils import get_client
+from sector_sentiment import get_sector_scores, get_symbol_sector, get_symbol_sector_score
 
 # ==================== SETUP ====================
 API_KEY = os.getenv('SCHWAB_API_KEY')
@@ -71,8 +72,6 @@ def _get_schwab_client():
     return _c
 
 ET_TZ = pytz.timezone('US/Eastern')
-
-caputured_opportunities = []
 
 # ==================== SYMBOL TIERS ====================
 # Tier 1: Wheel-grade blue chips — stocks you'd be happy to own if assigned
@@ -155,7 +154,7 @@ REGIME_SETTINGS = {
     "STRONG_BULL": {
         "delta_min": 0.15, "delta_max": 0.40,  # Loosened max
         "dte_min": 10, "dte_max": 40,
-        "target_profit_pct": 50,
+        "target_profit_pct": 65,
         "tier_limit": None,
         "name": "Aggressive Bull Wheel",
         "iv_min": 30
@@ -163,7 +162,7 @@ REGIME_SETTINGS = {
     "MILD_BULL": {
         "delta_min": 0.15, "delta_max": 0.37,
         "dte_min": 14, "dte_max": 45,
-        "target_profit_pct": 50,
+        "target_profit_pct": 55,
         "tier_limit": None,
         "name": "Classic Wheel",
         "iv_min": 35
@@ -179,7 +178,7 @@ REGIME_SETTINGS = {
     "CAUTIOUS": {
         "delta_min": 0.10, "delta_max": 0.30,
         "dte_min": 30, "dte_max": 45,
-        "target_profit_pct": 50,
+        "target_profit_pct": 45,
         "tier_limit": "TIER_1",
         "name": "Defensive Wheel",
         "iv_min": 50
@@ -187,7 +186,7 @@ REGIME_SETTINGS = {
     "BEARISH_HIGH_VOL": {
         "delta_min": 0.10, "delta_max": 0.30,
         "dte_min": 45, "dte_max": 50,
-        "target_profit_pct": 50,
+        "target_profit_pct": 40,
         "tier_limit": "TIER_1",
         "name": "Ultra-Defensive Wheel",
         "iv_min": 50
@@ -498,6 +497,23 @@ def check_quality_filters(symbol, hist_df=None, current_iv=None):
                 signals['iv_signal'] = "Moderate IV premium"
             else:
                 signals['iv_signal'] = "IV below HV (poor)"
+
+            # IV Rank (normalized 0-100 relative to 52-week HV range)
+            try:
+                if len(hist_df) >= 252:
+                    history_for_rank = hist_df
+                else:
+                    history_for_rank = ticker.history(period="1y", interval="1d")
+                hv_series = history_for_rank['Close'].pct_change().dropna().rolling(20).std() * np.sqrt(252) * 100
+                hv_52w_high = hv_series.max()
+                hv_52w_low = hv_series.min()
+                if hv_52w_high > hv_52w_low:
+                    iv_rank = ((current_iv - hv_52w_low) / (hv_52w_high - hv_52w_low)) * 100
+                    signals['iv_rank'] = round(max(0, min(100, iv_rank)), 1)
+                else:
+                    signals['iv_rank'] = 50
+            except Exception:
+                signals['iv_rank'] = 50
 
         # 3. Distance from 52-Week Low
         low_52w = hist_df['Close'].min()
@@ -814,7 +830,7 @@ def find_high_probability_options(symbol, current_price, tier, regime, grok_sent
         print(f"   Chain error {symbol}: {e}")
         return []
 
-def improved_put_score(premium, delta, dte, annualized_roi, iv, vol_surge, rsi, in_uptrend, distance_pct=0, tier=3, capital=0, iv_rank=50, sr_risk_flag="Neutral", regime="MILD_BULL", sr_mult=1.0, **kwargs):
+def improved_put_score(premium, delta, dte, annualized_roi, iv, vol_surge, rsi, in_uptrend, distance_pct=0, tier=3, capital=0, iv_rank=50, sr_risk_flag="Neutral", regime="MILD_BULL", sr_mult=1.0, sector_score=50, **kwargs):
     """
     Updated pre-Grok score with S/R bonus, vol surge, and NEW quality filters.
 
@@ -962,10 +978,36 @@ def improved_put_score(premium, delta, dte, annualized_roi, iv, vol_surge, rsi, 
     elif rs < -7:
         rs_mult = 0.95  # Too weak
 
+    # Sector momentum multiplier (from sector_sentiment.py scoring)
+    if sector_score >= 70:
+        sector_mult = 1.12   # Strong Bull sector — tailwind
+    elif sector_score >= 55:
+        sector_mult = 1.06
+    elif sector_score >= 40:
+        sector_mult = 1.0
+    elif sector_score >= 25:
+        sector_mult = 0.94
+    else:
+        sector_mult = 0.88   # Avoid-ranked sector — headwind
+
+    # IV Rank multiplier — reward selling when options are historically expensive
+    iv_rank_val = kwargs.get('iv_rank_val', iv_rank)  # also accept from kwargs
+    if iv_rank_val >= 80:
+        iv_rank_mult = 1.12  # Top-decile IV — great time to sell vol
+    elif iv_rank_val >= 60:
+        iv_rank_mult = 1.06
+    elif iv_rank_val >= 40:
+        iv_rank_mult = 1.0
+    elif iv_rank_val >= 20:
+        iv_rank_mult = 0.95
+    else:
+        iv_rank_mult = 0.90  # Historically cheap vol — avoid
+
     # Apply all multipliers
     score = (base * iv_mult * dte_mult * vol_mult * rsi_mult * trend_mult *
              distance_mult * tier_mult * sr_mult * regime_mult * capital_mult *
-             rebound_mult * quality_mult * liquidity_mult * macd_mult * rs_mult)
+             rebound_mult * quality_mult * liquidity_mult * macd_mult * rs_mult *
+             sector_mult * iv_rank_mult)
 
     # Safety-first: score is pure multiplier output, annualized ROI is a minor bonus
     # (was: score * 8 + annualized_roi * 2) / 2 — gave too much weight to raw yield)
@@ -1012,28 +1054,6 @@ async def analyze_symbol(symbol, regime, grok_sentiment):
             o['rebound_signals'] = rebound_signals
             o['is_rebound_candidate'] = is_rebound_candidate
         
-    for o in tqdm(captured_opportunities, desc="Grok Analysis", unit="trade"):
-        try:
-            prob, oneliner = get_grok_opportunity_analysis(
-                symbol=o['symbol'],
-                price=o['current_price'],
-                strike=o['strike'],
-                dte=o['dte'],
-                premium=o['premium'],
-                delta=o['delta'],
-                iv=o.get('iv', 30),
-                rsi=o.get('rsi', 50),
-                vol_surge=1.0,
-                in_uptrend=True
-            )
-        except Exception as e:
-            logging.warning(f"Grok analysis failed for {o['symbol']}: {e}")
-            prob = "N/A"
-            oneliner = "Analysis unavailable"
-
-        o['grok_profit_prob'] = prob
-        o['grok_one_liner'] = oneliner
-
         return opps
     else:
         print("| No Valid Contracts")
@@ -1046,10 +1066,27 @@ async def main():
     print("\n" + "="*70)
     print("STARTING Simple Options SCANNER")
     print("="*70)
-    
+
     regime_key = await get_current_regime()
     regime = REGIME_SETTINGS[regime_key]
     grok_sentiment, grok_summary = get_grok_sentiment_cached()
+
+    # Log regime change (only writes if it actually changed)
+    try:
+        from trade_outcome_tracker import log_regime_change
+        log_regime_change(regime_key)
+    except Exception as e:
+        print(f"   Regime log failed: {e}")
+
+    # Fetch sector scores once for the entire scan run
+    print("Fetching sector sentiment scores...")
+    try:
+        sector_scores = get_sector_scores()
+        top_sectors = sorted(sector_scores.items(), key=lambda x: x[1]['score'], reverse=True)
+        print("   Sector scores: " + " | ".join(f"{s}: {d['score']} ({d['label']})" for s, d in top_sectors[:5]))
+    except Exception as e:
+        print(f"   Sector scoring failed: {e}")
+        sector_scores = {}
     
     sentiment_emoji = "🚀" if "STRONG" in grok_sentiment else "📈" if "BULL" in grok_sentiment else "😐" if "NEUTRAL" in grok_sentiment else "⚠️" if "CAUTIOUS" in grok_sentiment else "🔴"
 
@@ -1123,6 +1160,12 @@ async def main():
             if opps and 'iv' in opps[0]:
                 passes_quality, quality_signals = check_quality_filters(sym, hist_df, current_iv=opps[0]['iv'])
 
+            # Sector info for this symbol
+            sym_sector = get_symbol_sector(sym)
+            sym_sector_data = get_symbol_sector_score(sym, sector_scores)
+            sym_sector_score = sym_sector_data.get('score', 50)
+            sym_sector_label = sym_sector_data.get('label', 'Neutral')
+
             for o in opps:
                 o['rsi'] = rsi
                 o['support_resistance'] = sr_levels
@@ -1133,6 +1176,12 @@ async def main():
                 # Add quality signals
                 o['quality_signals'] = quality_signals
                 o['passes_quality_filters'] = passes_quality
+                # Sector sentiment
+                o['sector'] = sym_sector
+                o['sector_score'] = sym_sector_score
+                o['sector_label'] = sym_sector_label
+                # IV Rank from quality signals
+                o['iv_rank'] = quality_signals.get('iv_rank', 50)
 
                 sr_risk = "Neutral"
                 sr = sr_levels.get('3', {})  # 3-month
@@ -1178,12 +1227,27 @@ async def main():
         capital=x['capital'],
         iv_rank=x.get('iv_rank', 50),
         sr_risk_flag=x.get('sr_risk_flag', 'Neutral'),
-        # NEW: Quality & rebound signals
+        sector_score=x.get('sector_score', 50),
+        # Quality & rebound signals
         rebound_score=x.get('rebound_score', 0),
         quality_signals=x.get('quality_signals', {}),
         open_interest=x.get('open_interest', 0),
         bid_ask_spread_pct=x.get('bid_ask_spread_pct', 0)
     ), reverse=True)
+
+    # Sector concentration cap: max 2 recommendations per GICS sector
+    MAX_PER_SECTOR = 2
+    sector_counts: dict = {}
+    capped_opps = []
+    for opp in all_opps:
+        opp_sector = opp.get('sector', get_symbol_sector(opp['symbol']))
+        # ETFs and Unknown sectors are not capped
+        if opp_sector in ('ETF', 'Unknown'):
+            capped_opps.append(opp)
+        elif sector_counts.get(opp_sector, 0) < MAX_PER_SECTOR:
+            capped_opps.append(opp)
+            sector_counts[opp_sector] = sector_counts.get(opp_sector, 0) + 1
+    all_opps = capped_opps
 
     for i, opp in enumerate(all_opps):
         opp['global_rank'] = i + 1
@@ -1204,7 +1268,9 @@ async def main():
             distance_pct=opp['distance'],
             tier=opp.get('tier', 3),
             capital=opp['capital'],
+            iv_rank=opp.get('iv_rank', 50),
             sr_risk_flag=opp.get('sr_risk_flag', 'Neutral'),
+            sector_score=opp.get('sector_score', 50),
             rebound_score=opp.get('rebound_score', 0),
             quality_signals=opp.get('quality_signals', {}),
             open_interest=opp.get('open_interest', 0),

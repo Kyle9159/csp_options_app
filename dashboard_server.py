@@ -1956,6 +1956,30 @@ def get_open_csps():
 
 # ==================== ANALYTICS API ====================
 
+@app.route('/api/token_cost')
+def get_token_cost():
+    """Return today's estimated Grok API token cost."""
+    try:
+        cost = get_daily_token_cost()
+        return jsonify({'ok': True, 'data': cost})
+    except Exception as e:
+        logger.error("token_cost error: %s", e)
+        return jsonify({'ok': False, 'error': {'code': 'INTERNAL_ERROR', 'message': str(e)}}), 500
+
+
+@app.route('/api/regime_history')
+def get_regime_history_route():
+    """Return recent regime change log entries."""
+    try:
+        from trade_outcome_tracker import get_regime_history
+        limit = int(request.args.get('limit', 60))
+        history = get_regime_history(limit=limit)
+        return jsonify({'ok': True, 'data': history})
+    except Exception as e:
+        logger.error("regime_history error: %s", e)
+        return jsonify({'ok': False, 'error': {'code': 'INTERNAL_ERROR', 'message': str(e)}}), 500
+
+
 @app.route('/api/analytics/summary')
 def get_analytics_summary():
     """

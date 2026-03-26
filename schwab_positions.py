@@ -7,6 +7,7 @@ retrieve open positions without depending on Google Sheets.
 
 import os
 import logging
+import pandas as _pd
 from datetime import date as _date
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,21 @@ def get_schwab_csp_positions() -> list[dict]:
             avg_price = float(pos.get("averagePrice", 0))     # premium received per share
             market_value = float(pos.get("marketValue", 0))   # negative for short
 
+            # Earnings proximity check — warns if earnings land before expiration
+            earnings_risk = False
+            days_to_earnings: int | None = None
+            try:
+                import yfinance as _yf
+                cal = _yf.Ticker(underlying).calendar
+                if cal is not None and 'Earnings Date' in cal:
+                    earn_dates = cal['Earnings Date']
+                    if isinstance(earn_dates, list) and earn_dates:
+                        next_earn = _pd.to_datetime(earn_dates[0])
+                        days_to_earnings = (next_earn - _pd.Timestamp.now()).days
+                        earnings_risk = days_to_earnings is not None and days_to_earnings < 14
+            except Exception:
+                pass
+
             exp_date_str = parsed["expiration"]   # ISO format: YYYY-MM-DD
             strike = parsed["strike"]
 
@@ -149,6 +165,9 @@ def get_schwab_csp_positions() -> list[dict]:
                     "Current Price": 0.0,
                     "Underlying Price": 0.0,
                     "Days Since Entry": 0,
+                    # Earnings risk enrichment
+                    "_earnings_risk": earnings_risk,
+                    "_days_to_earnings": days_to_earnings,
                 }
             )
 

@@ -2147,6 +2147,14 @@ def generate_html():
             </style>
         </head>
         <body>
+            {% if paper_trading %}
+            <div style="position:fixed; top:12px; right:12px; z-index:10000;
+                        background:#f59e0b; color:#1a1a1a; font-weight:bold;
+                        padding:6px 14px; border-radius:8px; font-size:13px;
+                        box-shadow:0 2px 10px rgba(0,0,0,0.5); letter-spacing:0.5px;">
+                🧪 PAPER MODE
+            </div>
+            {% endif %}
             <div style="position:fixed; top:12px; left:12px; z-index:9999; display:flex; gap:8px;">
                 <button onclick="refreshDashboard(this)" 
                     style="padding:12px 20px; background:#dc2626; color:white; border:none; border-radius:12px; cursor:pointer; font-weight:bold; box-shadow:0 4px 15px rgba(0,0,0,0.4);">
@@ -5889,6 +5897,7 @@ def generate_html():
 
     html_content = template.render(
         now=now,
+        paper_trading=PAPER_TRADING,
         grok_sentiment=grok_sentiment,
         grok_summary=grok_summary,
         open_trades=open_trades_json,
