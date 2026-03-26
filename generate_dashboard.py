@@ -382,6 +382,7 @@ async def run_all_bots():
         get_client()
 
         # === 0DTE SCANNER ===
+        print(f"STEP: [1/10] 0DTE Spreads  ({datetime.now().strftime('%H:%M:%S')})", flush=True)
         pbar.set_description("0DTE Spreads...")
 
         # Load from cache first
@@ -413,6 +414,7 @@ async def run_all_bots():
         pbar.update(1)
 
         # === LEAPS SCANNER ===
+        print(f"STEP: [2/10] LEAPS Scanner  ({datetime.now().strftime('%H:%M:%S')})", flush=True)
         pbar.set_description("LEAPS Scanner...")
 
         # Load from dedicated LEAPS cache file
@@ -438,6 +440,7 @@ async def run_all_bots():
         pbar.update(1)
 
         # === OPEN TRADES ===
+        print(f"STEP: [3/10] Open Trades  ({datetime.now().strftime('%H:%M:%S')})", flush=True)
         pbar.set_description("Open Trades...")
         trades_records, ws = load_trades_from_sheet()
         if not trades_records.empty:
@@ -652,6 +655,7 @@ async def run_all_bots():
 
         pbar.update(1)
 
+        print(f"STEP: [4/10] Capital Allocation  ({datetime.now().strftime('%H:%M:%S')})", flush=True)
         pbar.set_description("Capital Allocation...")
         
         # === CAPITAL ALLOCATION OPTIMIZER ===
@@ -740,6 +744,7 @@ async def run_all_bots():
         pbar.update(1)
 
         # === COVERED CALLS ===
+        print(f"STEP: [5/10] Covered Calls  ({datetime.now().strftime('%H:%M:%S')})", flush=True)
         pbar.set_description("Covered Calls...")
         positions = get_current_positions()
         if positions:
@@ -758,6 +763,7 @@ async def run_all_bots():
         pbar.update(1)
 
         # === SIMPLE SCANNER ===
+        print(f"STEP: [6/10] Simple Scanner  ({datetime.now().strftime('%H:%M:%S')})", flush=True)
         pbar.set_description("Simple Scanner...")
 
         cached_scanner_opps = load_cached_scanner()
@@ -837,6 +843,7 @@ async def run_all_bots():
         pbar.update(1)
 
          # Trade History...
+        print(f"STEP: [7/10] Trade History  ({datetime.now().strftime('%H:%M:%S')})", flush=True)
         pbar.set_description("Trade History...")
         trade_history = []
         try:
@@ -863,6 +870,7 @@ async def run_all_bots():
         pbar.update(1)
 
         #=======Dividend Tracker=======
+        print(f"STEP: [8/10] Dividend Tracker  ({datetime.now().strftime('%H:%M:%S')})", flush=True)
         pbar.set_description("Dividend Tracker...")
         dividend_tiles = await generate_dividend_report()
         if not dividend_tiles:
@@ -882,6 +890,7 @@ async def run_all_bots():
                         position_symbols.append(sym)
 
         # Calendar Events...
+        print(f"STEP: [9/10] Calendar Events  ({datetime.now().strftime('%H:%M:%S')})", flush=True)
         pbar.set_description("Calendar Events...")
         calendar_events = []
 
@@ -965,6 +974,7 @@ async def run_all_bots():
         calendar_events = calendar_events[:30]
         pbar.update(1)
 
+        print(f"STEP: [10/10] Grok Analysis  ({datetime.now().strftime('%H:%M:%S')})", flush=True)
         pbar.set_description("Grok Analysis...")       
         # GROK Symbols from open trades and covered calls
         grok_symbols = sorted(position_symbols)
@@ -5831,8 +5841,9 @@ def generate_html():
 
                         if (data.state === 'running') {
                             btn.disabled = true;
-                            btn.innerHTML = `Refreshing... ${Math.round(data.elapsed_seconds || 0)}s`;
-                            refreshPollTimer = setTimeout(() => checkRefreshStatus(btn), 4000);
+                            const step = data.current_step ? ` · ${data.current_step}` : '';
+                            btn.innerHTML = `⏳ ${Math.round(data.elapsed_seconds || 0)}s${step}`;
+                            refreshPollTimer = setTimeout(() => checkRefreshStatus(btn), 3000);
                             return;
                         }
 

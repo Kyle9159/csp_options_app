@@ -1108,10 +1108,26 @@ def refresh_dashboard_status():
     return_code = _refresh_process.poll()
     elapsed = round(time.time() - (_refresh_started_at or time.time()), 1)
 
+    # Extract the most recent STEP: line from the log for granular progress
+    current_step = None
+    try:
+        with open(_refresh_log_path, 'rb') as lf:
+            lf.seek(0, 2)
+            size = lf.tell()
+            lf.seek(max(0, size - 8192))
+            tail = lf.read().decode('utf-8', errors='replace')
+        for line in reversed(tail.splitlines()):
+            if line.startswith('STEP:'):
+                current_step = line[len('STEP:'):].strip()
+                break
+    except Exception:
+        pass
+
     if return_code is None:
         return jsonify({
             'state': 'running',
             'elapsed_seconds': elapsed,
+            'current_step': current_step,
             'message': f'Dashboard refresh running for {elapsed:.1f}s.'
         })
 
