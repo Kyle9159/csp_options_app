@@ -11,7 +11,6 @@ from tqdm import tqdm
 import dotenv
 import requests
 import json
-import gspread
 import math
 from pathlib import Path
 
@@ -35,7 +34,7 @@ GROK_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 
 # Bot imports
 from grok_utils import get_grok_opportunity_analysis
-from open_trade_monitor import load_trades_from_sheet, enrich_trade_with_live_data, get_live_quotes_concurrent, parse_option_symbol
+from schwab_positions import get_schwab_csp_positions
 from grok_utils import call_grok, MODEL_FAST
 from covered_call_bot import get_current_positions, find_covered_calls
 from dividend_tracker_bot import generate_dividend_report
@@ -54,7 +53,6 @@ from leaps_scanner import main as run_leaps_scanner
 ET_TZ = pytz.timezone('US/Eastern')
 DASHBOARD_FILE = 'trading_dashboard.html'
 EODHD_API_KEY = os.getenv('EODHD_API_KEY')
-GOOGLE_SHEET_ID = "1e5p_tKBR3qz52_q0-yIeEbTIofyKTcmcfqgiRBQ52Nc"
 
 WHEEL_CAPITAL = float(os.getenv('WHEEL_CAPITAL', 25000))  # Your total wheel cash
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', 5))
@@ -442,112 +440,52 @@ async def run_all_bots():
         # === OPEN TRADES ===
         print(f"STEP: [3/10] Open Trades  ({datetime.now().strftime('%H:%M:%S')})", flush=True)
         pbar.set_description("Open Trades...")
-        trades_records, ws = load_trades_from_sheet()
-        if not trades_records.empty:
-           # Get OCC symbols for live quotes
-           occ_symbols = []
-           for row_dict in trades_records.to_dict('records'):  # trades_records is list of dicts
-                   option_symbol = row_dict.get('Option Symbol', '')
-                   _, _, _, _, occ = parse_option_symbol(option_symbol)
-                   if occ:
-                       occ_symbols.append(occ)
-           
-           schwab_client = get_client()
-           if schwab_client and occ_symbols:
-               print("Schwab client available — fetching quotes...")
-               quotes = await get_live_quotes_concurrent(schwab_client, occ_symbols)
-               print(f"Received {len(quotes)} quotes back")
-               successful = [k for k, v in quotes.items() if v.get('bid', 0) > 0 or v.get('mark', 0) > 0]
-               print(f"{len(successful)} quotes have non-zero bid/mark")
-           else:
-               print("No Schwab client or no OCC symbols — using empty quotes")
-               quotes = {}
-           
-           enriched_trades = []
-           for row_dict in trades_records.to_dict('records'):
-               enriched = enrich_trade_with_live_data(row_dict.copy(), quotes)
-               enriched_trades.append(enriched)
-           
+        schwab_positions = get_schwab_csp_positions()
+        if schwab_positions:
            global open_trades
-           open_trades = enriched_trades[:10]  # Limit to top 10 for dashboard
-           print(f"Current Open Positions: {len(open_trades)}")
+           open_trades = schwab_positions[:10]  # Limit to top 10 for dashboard
+           print(f"Current Open Positions: {len(open_trades)} (sourced from Schwab)")
         else:
            open_trades = []
-         
+
         for trade in open_trades:
             symbol = trade.get('Symbol', 'N/A')
             strike = safe_float(trade.get('Strike', 0))
             entry_premium = safe_float(trade.get('Entry Premium', 0))
             contracts = safe_int(trade.get('Contracts Qty', 1))
 
-            # === Live & Fallback Quote Logic ===
-            live_mark = safe_float(trade.get('_current_mark', 0))
-            live_bid = safe_float(trade.get('_bid', 0))
-            live_ask = safe_float(trade.get('_ask', 0))
+            # _current_mark / _bid / _ask are set in get_schwab_csp_positions()
+            current_mark = safe_float(trade.get('_current_mark', trade.get('_current_premium', 0)))
+            bid = safe_float(trade.get('_bid', 0))
+            ask = safe_float(trade.get('_ask', 0))
 
-            sheet_mark = safe_float(trade.get('Current Mark', 0))
-            sheet_bid = safe_float(trade.get('Bid', 0))
-            sheet_ask = safe_float(trade.get('Ask', 0))
-
-            using_fallback = False
-
-            if live_mark <= 0.01 or (live_bid <= 0 and live_ask <= 0):
-                if sheet_mark > 0:
-                    current_mark = sheet_mark
-                    bid = sheet_bid
-                    ask = sheet_ask
-                    using_fallback = True
-                    print(f"   ⚠️ {symbol}: Using sheet fallback values")
-                else:
-                    current_mark = live_mark
-                    bid = live_bid
-                    ask = live_ask
-                    print(f"   ⚠️ {symbol}: No valid data — showing $0.00")
-            else:
-                current_mark = live_mark
-                bid = live_bid
-                ask = live_ask
-
-            # Store for template
-            trade['_current_mark'] = current_mark
+            # Keep formatted display values
             trade['Current Mark'] = f"${current_mark:.2f}"
             trade['Bid'] = f"${bid:.2f}"
             trade['Ask'] = f"${ask:.2f}"
-            trade['_bid'] = bid
-            trade['_ask'] = ask
-            trade['_using_fallback_quotes'] = using_fallback
+            trade['_using_fallback_quotes'] = False
 
             # === Core Metrics ===
-            # Try multiple keys for underlying price with robust fallback
-            underlying_price = safe_float(
-                trade.get('_underlying_price',
-                trade.get('Underlying Price',
-                trade.get('underlying_price',
-                trade.get('Underlying', 0))))
-            )
-            # Ensure it's not 0 - if so, try to calculate from other data
+            underlying_price = safe_float(trade.get('Current Price', trade.get('Underlying Price', strike)))
             if underlying_price <= 0 and strike > 0:
-                # If price is 0, use strike as fallback (not ideal but better than 0)
                 underlying_price = strike
-                print(f"   ⚠️ {symbol}: No underlying price found, using strike as fallback: ${underlying_price}")
 
             trade['_underlying_price'] = underlying_price
             trade['Underlying Price'] = underlying_price
 
-            delta = safe_float(trade.get('Delta', trade.get('delta', trade.get('_delta', 0))))
-            iv = safe_float(trade.get('IV', trade.get('iv', trade.get('_iv', 0))))
-            dte = trade['_dte'] if '_dte' in trade else safe_int(trade.get('DTE', trade.get('dte', 0)))
-            days_open = trade['_days_open'] if '_days_open' in trade else safe_int(trade.get('Days Since Entry', 0))
+            delta = safe_float(trade.get('Delta', 0))
+            iv = safe_float(trade.get('IV', 0))
+            dte = safe_int(trade.get('DTE', trade.get('_dte', 0)))
+            days_open = safe_int(trade.get('Days Since Entry', 0))
 
             # === P/L & Progress ===
-            pl_dollars = (entry_premium - current_mark) * 100 * contracts
+            pl_dollars = safe_float(trade.get('_pl_dollars', (entry_premium - current_mark) * 100 * contracts))
             trade['_pl_dollars'] = pl_dollars
             trade['Current P/L $'] = f"${pl_dollars:+,.0f}"
 
-            progress_pct = 0.0
-            if entry_premium > 0:
-                progress_pct = ((entry_premium - current_mark) / entry_premium) * 100
-                progress_pct = min(max(progress_pct, 0), 100)
+            progress_pct = safe_float(trade.get('_progress_pct', 0))
+            if progress_pct == 0 and entry_premium > 0:
+                progress_pct = min(max(((entry_premium - current_mark) / entry_premium) * 100, 0), 100)
             trade['_progress_pct'] = progress_pct
             trade['Progress to Target'] = f"{progress_pct:.1f}%"
             trade['display_delta'] = f"{abs(delta):.2f}"
@@ -847,21 +785,30 @@ async def run_all_bots():
         pbar.set_description("Trade History...")
         trade_history = []
         try:
-            if not os.path.exists('google-credentials.json'):
-                print("⚠️  google-credentials.json not found. Trade History will be empty.")
-                trade_history = []
-            else:
-                gc = gspread.service_account(filename='google-credentials.json')
-                sh = gc.open_by_key("1e5p_tKBR3qz52_q0-yIeEbTIofyKTcmcfqgiRBQ52Nc")
-                history_ws = sh.worksheet("Trade_History")
-                records = history_ws.get_all_records()
-                print(f"Found {len(records)} total records in Trade_History sheet")
-                trade_history = [r for r in records if r.get('Exit Date')]  # Only closed
-                print(f"Found {len(trade_history)} closed trades (with Exit Date)")
-                # Optional: enrich with strike formatting
-                for t in trade_history:
-                    strike = safe_float(t.get('Strike', 0))
-                    t['strike_display'] = f"${strike:.2f}P" if strike > 0 else "N/A"
+            from trade_outcome_tracker import get_recent_trades as _ot_recent
+            raw_records = _ot_recent(limit=200)
+            closed = [r for r in raw_records if r.get('exit_date') and r.get('outcome', '') != 'open']
+            for t in closed:
+                strike = safe_float(t.get('strike', 0))
+                pnl = safe_float(t.get('pnl', 0))
+                entry_prem = safe_float(t.get('entry_premium', 0))
+                exit_prem = safe_float(t.get('exit_premium', 0))
+                pnl_pct = safe_float(t.get('pnl_pct', 0))
+                contracts = safe_int(t.get('contracts', 1))
+                t.setdefault('Symbol', t.get('symbol', ''))
+                t.setdefault('Strike', strike)
+                t.setdefault('Strategy', 'CSP')
+                t.setdefault('Entry Date', t.get('entry_date', ''))
+                t.setdefault('Exit Date', t.get('exit_date', ''))
+                t.setdefault('Days Held', t.get('holding_days', ''))
+                t.setdefault('Entry Premium', entry_prem)
+                t.setdefault('Exit Premium', exit_prem)
+                t.setdefault('Net Profit $', pnl)
+                t.setdefault('ROI %', pnl_pct)
+                t.setdefault('Annualized ROI%', round(pnl_pct * (365 / max(safe_int(t.get('holding_days', 1)), 1)), 2))
+                t['strike_display'] = f"${strike:.2f}P" if strike > 0 else "N/A"
+            trade_history = closed
+            print(f"Found {len(trade_history)} closed trades (from SQLite)")
         except Exception as e:
             print(f"❌ Trade history load failed: {e}")
             import traceback

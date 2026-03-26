@@ -13,7 +13,6 @@ import requests
 import yfinance as yf
 import dotenv
 from jinja2 import Environment, FileSystemLoader
-import gspread
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -34,7 +33,7 @@ from grok_utils import (
     MODEL_MID,
     MODEL_REASONING,
 )
-from open_trade_monitor import load_trades_from_sheet, update_sheet_with_live_data, get_sheet
+from schwab_positions import get_open_positions_as_df as _get_open_positions_compat, get_schwab_csp_positions
 from helper_functions import safe_float, safe_int, safe_date
 # import leaps_scanner  # Not critical for dashboard
 # import zero_dte_spread_scanner  # Not critical for dashboard
@@ -46,6 +45,13 @@ from earnings_calendar import check_earnings_conflict, get_earnings_recommendati
 from position_sizing import calculate_position_size
 from smart_alerts import run_alert_scan
 from trade_journal import get_recent_trades, get_trade_performance_summary
+from trade_outcome_tracker import (
+    get_recent_trades as _ot_get_recent_trades,
+    get_trade_stats as _ot_get_trade_stats,
+    log_trade_exit as _ot_log_trade_exit,
+    get_open_trades as _ot_get_open_trades,
+    get_db as _ot_get_db,
+)
 from schwab_utils import sell_put_to_open, buy_put_to_close
 
 
@@ -57,8 +63,6 @@ open_bot = telegram_bot(token=OPEN_TRADE_TELEGRAM_TOKEN) if OPEN_TRADE_TELEGRAM_
 
 XAI_API_KEY = os.getenv('XAI_API_KEY')
 GROK_ENDPOINT = "https://api.x.ai/v1/chat/completions"
-GOOGLE_SHEET_ID = "1e5p_tKBR3qz52_q0-yIeEbTIofyKTcmcfqgiRBQ52Nc"
-
 ET_TZ = pytz.timezone('US/Eastern')
 
 LAST_MIRROR_CALL = 0
@@ -313,68 +317,9 @@ def run_all_scanners():
 
 @app.route('/live/open_trades')
 def live_open_trades():
-    trades_result = load_trades_from_sheet()
-    if trades_result is None:
-        return jsonify([])
-    
-    df, _ = trades_result  # Unpack — we only need df here
-    if df is None or df.empty:
-        return jsonify([])
-    
-    updated_trades = []
-    for _, row in df.iterrows():
-        symbol = row['Symbol']
-        strike = row['Strike']
-        exp = row['Exp Date']  # Assume format 'MM/DD/YYYY'
-        entry = row['Entry Premium']
-        
-        try:
-            # Parse expiration for yfinance (YYYY-MM-DD)
-            exp_date = datetime.strptime(exp, '%m/%d/%Y').strftime('%Y-%m-%d')
-            
-            tk = yf.Ticker(symbol)
-            chain = tk.option_chain(exp_date)
-            puts = chain.puts
-            put_row = puts[puts['strike'] == strike]
-            
-            if not put_row.empty:
-                bid = put_row['bid'].iloc[0]
-                ask = put_row['ask'].iloc[0]
-                mark = (bid + ask) / 2 if bid > 0 and ask > 0 else bid or ask or 0
-                underlying = tk.info.get('regularMarketPrice') or tk.info.get('previousClose', 0)
-                delta = put_row['delta'].iloc[0] if 'delta' in put_row.columns else row.get('Delta', 0)
-                iv = put_row['impliedVolatility'].iloc[0] * 100 if 'impliedVolatility' in put_row.columns else row.get('IV', 0)
-            else:
-                mark = row.get('Current Mark', 0)
-                underlying = row.get('Underlying Price', 0)
-                delta = row.get('Delta', 0)
-                iv = row.get('IV', 0)
-        except:
-            # Fallback to sheet values if fail
-            mark = row.get('Current Mark', 0)
-            underlying = row.get('Underlying Price', 0)
-            delta = row.get('Delta', 0)
-            iv = row.get('IV', 0)
-        
-        progress = ((entry - mark) / entry * 100) if entry > 0 else 0
-        pl_dollar = (entry - mark) * 100  # per contract
-        pl_pct = progress
-        
-        trade_dict = row.to_dict()
-        trade_dict.update({
-            'Current Mark': round(mark, 2),
-            'Underlying Price': round(underlying, 2),
-            'Progress to Target': round(progress, 1),
-            'Current P/L $': round(pl_dollar, 2),
-            'Current P/L %': round(pl_pct, 1),
-            'Delta': round(delta, 2),
-            'IV': round(iv, 1),
-            'Bid': round(bid if 'bid' in locals() else 0, 2),
-            'Ask': round(ask if 'ask' in locals() else 0, 2)
-        })
-        updated_trades.append(trade_dict)
-    
-    return jsonify(updated_trades)
+    """Return live open CSP positions from Schwab (replaces Google Sheets source)."""
+    rows = get_schwab_csp_positions()
+    return jsonify(rows)
 
 @app.route('/alert/milestone/<symbol>/<float:progress>')
 def milestone_alert(symbol, progress):
@@ -385,30 +330,8 @@ def milestone_alert(symbol, progress):
 
 @app.route('/run/open_trades_refresh')
 def run_open_trades_refresh():
-    task_id = str(uuid.uuid4())
-
-    def create_refresh_task(progress_callback):
-        async def task():
-            progress_callback(10)  # Starting...
-
-            try:
-                # Run the core logic from open_trade_monitor
-                df, live_ws = load_trades_from_sheet()  # Reuse your function
-                if df is not None and not df.empty:
-                    await update_sheet_with_live_data(df, live_ws)
-                    progress_callback(80)
-                    await asyncio.sleep(2)  # Let sheet settle
-                    progress_callback(100)
-                else:
-                    progress_callback(100)  # Nothing to do
-            except Exception as e:
-                print(f"Open trades refresh failed: {e}")
-                progress_callback(100)
-
-        return task()
-
-    run_async_with_progress(task_id, create_refresh_task)
-    return jsonify({"status": "Refreshing Open CSPs with live data — sheet updating!", "task_id": task_id})
+    """Positions now sourced live from Schwab — no sheet refresh required."""
+    return jsonify({"status": "Positions are sourced live from Schwab on every request. No refresh needed."})
 
 @app.route('/grok/market_pulse')
 def grok_market_pulse():
@@ -613,12 +536,9 @@ def grok_analyze_option():
 @app.route('/grok/trade_analysis', methods=['POST'])
 def grok_trade_analysis():
     try:
-        # Load closed trades
-        gc = gspread.service_account(filename="google-credentials.json")
-        sh = gc.open_by_key(GOOGLE_SHEET_ID)
-        history_ws = sh.worksheet("Trade_History")
-        records = history_ws.get_all_records()
-        closed_trades = [r for r in records if r.get('Exit Date') and str(r.get('Exit Date', '')).strip()]
+        # Load closed trades from SQLite trade outcome tracker
+        records = _ot_get_recent_trades(limit=200)
+        closed_trades = [r for r in records if r.get('exit_date') and r.get('outcome') != 'open']
 
         if not closed_trades:
             return {"analysis": "No closed trades found for analysis."}
@@ -626,21 +546,18 @@ def grok_trade_analysis():
         # Build rich trade data
         trades_text = ""
         for i, t in enumerate(closed_trades, 1):
-            symbol = t.get('Symbol', 'N/A')
-            strike = safe_float(t.get('Strike', 0))
-            exp_str = t.get('Exp Date', 'N/A')
-            entry_prem = safe_float(t.get('Entry Premium', 0))
-            exit_prem = safe_float(t.get('Exit Premium', 0)) or 0
-            pl = safe_float(t.get('Net Profit $', 0))
-            days_held = safe_int(t.get('Days Held', 0))
-            iv_entry = t.get('IV at Entry', 'N/A')
-            rsi_entry = t.get('RSI at Entry', 'N/A')
+            symbol = t.get('symbol', 'N/A')
+            strike = safe_float(t.get('strike', 0))
+            exp_str = t.get('expiration', 'N/A')
+            entry_prem = safe_float(t.get('entry_premium', 0))
+            exit_prem = safe_float(t.get('exit_premium', 0)) or 0
+            pl = safe_float(t.get('pnl', 0))
+            days_held = safe_int(t.get('holding_days', 0))
 
             trades_text += (
                 f"#{i}: {symbol} ${strike:.2f}P exp {exp_str} | "
                 f"Entry ${entry_prem:.2f} → Exit ${exit_prem:.2f} | "
-                f"{days_held}d | P/L ${pl:+,.0f} {'WIN' if pl > 0 else 'LOSS' if pl < 0 else 'BE'} | "
-                f"IV {iv_entry} RSI {rsi_entry}\n"
+                f"{days_held}d | P/L ${pl:+,.0f} {'WIN' if pl > 0 else 'LOSS' if pl < 0 else 'BE'}\n"
             )
 
         system = (
@@ -706,7 +623,7 @@ def calculate_cc_live():
 @app.post("/csp/suggest_roll")
 def suggest_roll():
     try:
-        trades_result = load_trades_from_sheet()
+        trades_result = _get_open_positions_compat()
         if trades_result is None:
             return jsonify([])
 
@@ -725,21 +642,21 @@ def suggest_roll():
             strike = safe_float(row.get('Strike', 0))
             exp_date = row.get('Exp Date', '')
             entry_premium = safe_float(row.get('Entry Premium', 0))
+            dte = safe_int(row.get('DTE', 0))
 
-            # Fetch current underlying price
+            # Try to get current underlying price from Schwab quote
             try:
-                tk = yf.Ticker(symbol)
-                underlying = tk.info.get('regularMarketPrice') or tk.info.get('previousClose', 0)
+                from schwab_utils import get_client as _sc
+                _cl = _sc()
+                _cl.set_enforce_enums(False)
+                _qr = _cl.get_quotes([symbol])
+                if _qr.status_code == 200:
+                    _qd = _qr.json().get(symbol, {}).get('quote', {})
+                    underlying = float(_qd.get('lastPrice', 0) or 0)
+                else:
+                    underlying = 0
             except Exception:
                 underlying = 0
-
-            # Calculate DTE remaining
-            dte = 0
-            try:
-                exp_dt = datetime.strptime(str(exp_date).strip(), '%m/%d/%Y')
-                dte = max((exp_dt.date() - datetime.now().date()).days, 0)
-            except Exception:
-                pass
 
             prompt = (
                 f"{symbol} @ ${underlying:.2f} | Short ${strike:.2f}P exp {exp_date} | "
@@ -766,69 +683,45 @@ def suggest_roll():
         return jsonify(suggestions)
     except Exception as e:
         return {"result": f"Rollover Analysis Failed: {str(e)}"}
-    
+
 @app.post("/csp/mark_closed")
 def mark_trade_closed():
+    """Log a trade exit in SQLite. The position disappears from Schwab live data automatically."""
     try:
         data = request.json
-        symbol = data.get('symbol')
-        strike = data.get('strike')
-        exp_date = data.get('exp_date')
+        symbol = data.get('symbol', '').strip().upper()
+        strike = safe_float(data.get('strike', 0))
+        exit_premium = safe_float(data.get('exit_premium', 0))
+        outcome = data.get('outcome', 'closed_profit')
 
         if not symbol or not strike:
             return {"status": "Error: Missing symbol or strike"}, 400
 
-        # Load Live_Trades
-        gc = gspread.service_account(filename="google-credentials.json")
-        sh = gc.open_by_key(GOOGLE_SHEET_ID)
-        live_ws = sh.worksheet("Live_Trades")
-        history_ws = sh.worksheet("Trade_History")
-
-        live_records = live_ws.get_all_records()
-        row_to_move = None
-        row_index = None
-
-        for i, row in enumerate(live_records, start=2):  # +2 for header + 1-based
-            if (row.get('Symbol', '').strip() == symbol.strip() and
-                safe_float(row.get('Strike', 0)) == safe_float(strike) and
-                row.get('Exp Date', '').strip() == exp_date.strip()):
-                row_to_move = row
-                row_index = i
+        # Find matching open trade in SQLite
+        open_trades = _ot_get_open_trades()
+        trade_id = None
+        for t in open_trades:
+            if (t.get('symbol', '').upper() == symbol and
+                    abs(safe_float(t.get('strike', 0)) - strike) < 0.01):
+                trade_id = t['id']
                 break
 
-        if not row_to_move:
-            return {"status": "Trade not found in Live_Trades"}, 404
+        if trade_id:
+            _ot_log_trade_exit(trade_id, exit_premium=exit_premium, outcome=outcome)
+            return {"status": f"{symbol} ${strike} marked as closed in trade journal."}
 
-        # Prepare row for History
-        today = datetime.now(ET_TZ).strftime('%m/%d/%Y')
-        history_row = row_to_move.copy()
-        history_row['Exit Date'] = today
-        # Optional: clear or set defaults
-        history_row['Exit Premium'] = ''
-        history_row['Net Profit $'] = ''
-        history_row['Notes'] = ''
-
-        # Append to Trade_History
-        history_ws.append_row(list(history_row.values()))
-
-        # Delete from Live_Trades
-        live_ws.delete_rows(row_index)
-
-        return {"status": f"{symbol} marked as closed and moved to Trade History!"}
+        return {"status": f"{symbol} not found in open trades — may already be closed or not yet logged."}, 404
 
     except Exception as e:
-        logging.error(f"Mark closed failed: {e}")
+        logger.error(f"Mark closed failed: {e}")
         return {"status": "Server error — check logs"}, 500
 
 @app.get("/grok/dna")
 def get_trading_dna():
     try:
-        # Load closed trades
-        gc = gspread.service_account(filename="google-credentials.json")
-        sh = gc.open_by_key(GOOGLE_SHEET_ID)
-        history_ws = sh.worksheet("Trade_History")
-        records = history_ws.get_all_records()
-        closed_trades = [r for r in records if r.get('Exit Date') and str(r.get('Exit Date', '')).strip()]
+        # Load closed trades from SQLite trade outcome tracker
+        records = _ot_get_recent_trades(limit=100)
+        closed_trades = [r for r in records if r.get('exit_date') and r.get('outcome') != 'open']
 
         if len(closed_trades) < 5:
             return {"dna": "🔍 <strong>Not enough closed trades for DNA analysis</strong><br><br>"
@@ -838,10 +731,10 @@ def get_trading_dna():
         # Build concise trade list (limit to avoid token overflow)
         trades_summary = ""
         for i, t in enumerate(closed_trades[:20], 1):
-            symbol = t.get('Symbol', 'N/A')
-            strike = safe_float(t.get('Strike', 0))
-            pl = safe_float(t.get('Net Profit $', 0))
-            days = safe_int(t.get('Days Held', 0))
+            symbol = t.get('symbol', 'N/A')
+            strike = safe_float(t.get('strike', 0))
+            pl = safe_float(t.get('pnl', 0))
+            days = safe_int(t.get('holding_days', 0))
             result = "WIN" if pl > 0 else "LOSS" if pl < 0 else "BE"
             trades_summary += f"{i}. {symbol} ${strike:.0f}P | {days}d | ${pl:+,.0f} | {result}\n"
 
@@ -883,7 +776,7 @@ def get_trading_dna():
                        f"{analysis_html}"}
 
     except Exception as e:
-        logging.error(f"DNA analysis error: {e}")
+        logger.error(f"DNA analysis error: {e}")
         return {"dna": "<strong style='color:#fb923c;'>⚠️ Analysis failed</strong><br><br>"
                        "Check server logs or try again later."}
 
@@ -1171,8 +1064,8 @@ def get_portfolio_greeks():
     Returns aggregated delta, theta, vega, gamma with risk alerts.
     """
     try:
-        # Load current trades from Google Sheets
-        trades_result = load_trades_from_sheet()
+        # Load current trades from Schwab live positions
+        trades_result = _get_open_positions_compat()
 
         if trades_result is None:
             return jsonify({
@@ -1334,7 +1227,7 @@ def get_exit_targets():
     """
     try:
         # Load current trades
-        trades_result = load_trades_from_sheet()
+        trades_result = _get_open_positions_compat()
 
         if trades_result is None:
             return jsonify({'positions': []})
@@ -1378,7 +1271,7 @@ def get_exit_targets():
                     current_premium = safe_float(row.get('Current Premium', 0))
                     logger.warning(f"Using sheet fallback for {symbol} ${strike}P: ${current_premium:.2f}")
 
-                # Use Current Price from sheet (already fetched by open_trade_monitor)
+                # Use Current Price from live Schwab position data
                 current_price = safe_float(row.get('Current Price', 0))
                 current_iv = safe_float(row.get('IV', 0.30))
 
@@ -1418,109 +1311,60 @@ def get_exit_targets():
 @app.route('/api/trade_performance')
 def get_trade_performance():
     """
-    Get trade performance summary from Google Sheets Trade History.
+    Get trade performance summary from SQLite trade outcome tracker.
 
     Returns win rate, profit factor, expectancy, and trade statistics.
     """
     try:
-        # Load Trade History from Google Sheets
-        gc = gspread.service_account(filename='google-credentials.json')
-        sh = gc.open_by_key(GOOGLE_SHEET_ID)
-        history_ws = sh.worksheet("Trade_History")
-        trades = history_ws.get_all_records()
+        with _ot_get_db() as conn:
+            rows = conn.execute("""
+                SELECT
+                    COUNT(*) as total_trades,
+                    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+                    SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END) as losses,
+                    SUM(pnl) as total_pnl,
+                    AVG(CASE WHEN pnl > 0 THEN pnl END) as avg_win,
+                    ABS(AVG(CASE WHEN pnl <= 0 THEN pnl END)) as avg_loss,
+                    AVG(holding_days) as avg_holding_days
+                FROM trades
+                WHERE outcome != 'open' AND exit_date IS NOT NULL
+            """).fetchone()
 
-        # Validate required columns exist
-        required_columns = ['Exit Date', 'Net Profit $', 'DTE', 'Days Held']
-        if trades:
-            first_trade = trades[0]
-            missing_columns = [col for col in required_columns if col not in first_trade]
+        total_trades = rows['total_trades'] or 0
+        wins = rows['wins'] or 0
+        losses = rows['losses'] or 0
+        total_pnl = float(rows['total_pnl'] or 0)
+        avg_win = float(rows['avg_win'] or 0)
+        avg_loss = float(rows['avg_loss'] or 0)
+        avg_days_held = float(rows['avg_holding_days'] or 0)
 
-            # Try common alternative column names
-            column_mapping = {
-                'Net Profit $': ['Net Profit $', 'Net_Profit', 'Profit', 'Net Profit'],
-                'DTE': ['DTE', 'Days_To_Expiry', 'Days To Expiry'],
-                'Days Held': ['Days Held', 'Days_Held', 'Hold Duration']
-            }
+        if not total_trades:
+            return jsonify({'total_trades': 0, 'win_rate': 0.0, 'profit_factor': 0.0,
+                            'total_pnl': 0.0, 'expectancy': 0.0})
 
-            if missing_columns:
-                logger.warning(f"Missing columns in Trade_History: {missing_columns}")
-                logger.info(f"Available columns: {list(first_trade.keys())}")
+        win_rate = wins / total_trades * 100
+        loss_rate = 1 - win_rate / 100
 
-                # Try to map alternative column names
-                for required_col in missing_columns:
-                    alternatives = column_mapping.get(required_col, [])
-                    found_col = next((alt for alt in alternatives if alt in first_trade), None)
-                    if found_col and found_col != required_col:
-                        logger.info(f"Mapping '{found_col}' to '{required_col}'")
-                        for trade in trades:
-                            trade[required_col] = trade.get(found_col, 0)
-
-        # Filter closed trades (those with Exit Date)
-        closed_trades = [t for t in trades if t.get('Exit Date')]
-
-        logger.info(f"Loaded {len(trades)} total trades, {len(closed_trades)} closed trades from Trade_History")
-
-        if not closed_trades:
-            logger.warning("No closed trades found in Trade_History (trades need Exit Date populated)")
-            return jsonify({
-                'total_trades': 0,
-                'win_rate': 0.0,
-                'profit_factor': 0.0,
-                'total_pnl': 0.0,
-                'expectancy': 0.0
-            })
-
-        # Calculate statistics
-        total_trades = len(closed_trades)
-
-        # Separate winners and losers
-        winners = [t for t in closed_trades if safe_float(t.get('Net Profit $', 0)) > 0]
-        losers = [t for t in closed_trades if safe_float(t.get('Net Profit $', 0)) <= 0]
-
-        # Win Rate
-        win_rate = (len(winners) / total_trades * 100) if total_trades > 0 else 0.0
-
-        # Total P&L
-        total_pnl = sum(safe_float(t.get('Net Profit $', 0)) for t in closed_trades)
-
-        # Total wins and losses
-        total_wins = sum(safe_float(t.get('Net Profit $', 0)) for t in winners)
-        total_losses = sum(abs(safe_float(t.get('Net Profit $', 0))) for t in losers)
-
-        # Profit Factor (cap at 999.99 to avoid infinity)
-        if total_losses > 0:
-            profit_factor = total_wins / total_losses
-        elif total_wins > 0:
-            profit_factor = 999.99  # Cap instead of infinity
+        if avg_loss > 0:
+            profit_factor = min(avg_win * wins / (avg_loss * losses), 999.99) if losses > 0 else 999.99
         else:
-            profit_factor = 0.0
+            profit_factor = 999.99 if avg_win > 0 else 0.0
 
-        # Average winner and loser
-        avg_winner = (total_wins / len(winners)) if winners else 0.0
-        avg_loser = (total_losses / len(losers)) if losers else 0.0
+        expectancy = (avg_win * win_rate / 100) - (avg_loss * loss_rate)
 
-        # Expectancy
-        win_rate_decimal = win_rate / 100
-        loss_rate = 1 - win_rate_decimal
-        expectancy = (avg_winner * win_rate_decimal) - (avg_loser * loss_rate)
-
-        # Calculate average DTE and days held
-        avg_dte = sum(safe_float(t.get('DTE', 0)) for t in closed_trades) / total_trades if total_trades > 0 else 0
-        avg_days_held = sum(safe_float(t.get('Days Held', 0)) for t in closed_trades) / total_trades if total_trades > 0 else 0
-
-        logger.info(f"Performance calculated from {total_trades} trades: {len(winners)} wins, {len(losers)} losses")
+        logger.info(f"Performance from {total_trades} trades: {wins}W/{losses}L")
 
         return jsonify({
             'total_trades': total_trades,
-            'wins': len(winners),
-            'losses': len(losers),
+            'wins': wins,
+            'losses': losses,
             'win_rate': round(win_rate, 1),
             'profit_factor': round(profit_factor, 2),
             'total_pnl': round(total_pnl, 2),
-            'avg_win': round(avg_winner, 2),
-            'avg_loss': round(avg_loser, 2),
+            'avg_win': round(avg_win, 2),
+            'avg_loss': round(avg_loss, 2),
             'expectancy': round(expectancy, 2),
-            'avg_dte': round(avg_dte, 1),
+            'avg_dte': 0,
             'avg_days_held': round(avg_days_held, 1)
         })
 
@@ -1532,7 +1376,7 @@ def get_trade_performance():
 @app.route('/api/recent_trades')
 def get_api_recent_trades():
     """
-    Get recent trades from Google Sheets (live data).
+    Get recent trades from SQLite + live Schwab positions.
 
     Query params:
     - limit: Number of trades to return (default 10)
@@ -1544,80 +1388,52 @@ def get_api_recent_trades():
 
         trades = []
 
-        # Load CLOSED trades from Trade_History sheet
+        # Load CLOSED trades from SQLite trade outcome tracker
         if status_filter in ['closed', 'all']:
             try:
-                import gspread
-                gc = gspread.service_account(filename='google-credentials.json')
-                sh = gc.open_by_key("1e5p_tKBR3qz52_q0-yIeEbTIofyKTcmcfqgiRBQ52Nc")
-                history_ws = sh.worksheet("Trade_History")
-                records = history_ws.get_all_records()
-
+                records = _ot_get_recent_trades(limit=limit * 2)
                 for row in records:
-                    # Only include trades with Exit Date (closed trades)
-                    exit_date = row.get('Exit Date', '')
-                    if not exit_date:
+                    if row.get('outcome') == 'open':
                         continue
-
-                    symbol = str(row.get('Symbol', ''))
-                    strike = safe_float(row.get('Strike', 0))
-                    entry_premium = safe_float(row.get('Entry Premium', 0))
-                    exit_premium = safe_float(row.get('Exit Premium', 0))
-                    entry_date = str(row.get('Entry Date', ''))
-                    quantity = safe_int(row.get('Quantity', 1))
-                    net_profit = safe_float(row.get('Net Profit $', 0))
-                    roc = safe_float(row.get('ROC%', 0))
-                    days_held = safe_int(row.get('Days Held', 0))
-
                     trades.append({
-                        'symbol': symbol,
-                        'strike': strike,
+                        'symbol': row.get('symbol', ''),
+                        'strike': row.get('strike', 0),
                         'status': 'closed',
-                        'entry_date': entry_date,
-                        'exit_date': str(exit_date),
-                        'entry_premium': entry_premium,
-                        'exit_premium': exit_premium,
-                        'quantity': quantity,
-                        'pnl': net_profit,
-                        'roc': roc,
-                        'days_held': days_held
+                        'entry_date': row.get('entry_date', ''),
+                        'exit_date': row.get('exit_date', ''),
+                        'entry_premium': row.get('entry_premium', 0),
+                        'exit_premium': row.get('exit_premium', 0),
+                        'quantity': row.get('contracts', 1),
+                        'pnl': row.get('pnl', 0),
+                        'roc': row.get('pnl_pct', 0),
+                        'days_held': row.get('holding_days', 0),
                     })
-
-                logger.info(f"Loaded {len(trades)} closed trades from Trade_History")
-
+                logger.info(f"Loaded {len(trades)} closed trades from SQLite")
             except Exception as e:
-                logger.error(f"Failed to load Trade_History: {e}")
+                logger.error(f"Failed to load closed trades from SQLite: {e}")
 
-        # Load OPEN trades from Open Trades sheet
+        # Load OPEN trades from Schwab live positions
         if status_filter in ['open', 'all']:
             try:
-                trades_result = load_trades_from_sheet()
-                if trades_result:
-                    df, _ = trades_result
-                    if df is not None and not df.empty:
-                        for _, row in df.iterrows():
-                            symbol = str(row.get('Symbol', ''))
-                            strike = safe_float(row.get('Strike', 0))
-                            entry_premium = safe_float(row.get('Entry Premium', 0))
-                            current_premium = safe_float(row.get('Current Premium', 0))
-                            quantity = safe_int(row.get('Quantity', 1))
-                            pnl = (entry_premium - current_premium) * quantity * 100
-
-                            trades.append({
-                                'symbol': symbol,
-                                'strike': strike,
-                                'status': 'open',
-                                'entry_date': str(row.get('Entry Date', '')),
-                                'entry_premium': entry_premium,
-                                'current_premium': current_premium,
-                                'quantity': quantity,
-                                'pnl': pnl
-                            })
+                for row in get_schwab_csp_positions():
+                    quantity = safe_int(row.get('Quantity', 1))
+                    entry_premium = safe_float(row.get('Entry Premium', 0))
+                    current_premium = safe_float(row.get('Current Premium', 0))
+                    trades.append({
+                        'symbol': row.get('Symbol', ''),
+                        'strike': row.get('Strike', 0),
+                        'status': 'open',
+                        'entry_date': '',
+                        'entry_premium': entry_premium,
+                        'current_premium': current_premium,
+                        'quantity': quantity,
+                        'pnl': round((entry_premium - current_premium) * quantity * 100, 2),
+                    })
             except Exception as e:
-                logger.error(f"Failed to load open trades: {e}")
+                logger.error(f"Failed to load open positions from Schwab: {e}")
 
         # Sort by entry date, most recent first
-        trades.sort(key=lambda x: x.get('entry_date', ''), reverse=True)
+        trades.sort(key=lambda x: x.get('entry_date', '') or x.get('exit_date', ''), reverse=True)
 
         return jsonify({'trades': trades[:limit]})
 
@@ -1722,30 +1538,22 @@ def run_smart_alerts():
             try:
                 progress_callback(20)
 
-                # Load current trades
-                trades_result = load_trades_from_sheet()
+                # Load current positions from Schwab
+                positions = get_schwab_csp_positions()
 
-                if trades_result is None:
-                    return {'status': 'error', 'message': 'Could not load trades'}
-
-                # Unpack DataFrame
-                df, _ = trades_result
-
-                if df is None or df.empty:
+                if not positions:
                     return {'status': 'success', 'message': 'No trades to scan'}
 
                 # Convert to format expected by smart_alerts
-                trades = []
-                for _, row in df.iterrows():
-                    trades.append({
-                        'symbol': str(row.get('Symbol', '')),
-                        'strike': safe_float(row.get('Strike', 0)),
-                        'entry_premium': safe_float(row.get('Entry Premium', 0)),
-                        'current_premium': safe_float(row.get('Current Premium', 0)),
-                        'underlying_price': safe_float(row.get('Current Price', 0)),
-                        'expiration_date': str(row.get('Exp Date', '')),
-                        'current_iv': safe_float(row.get('IV', 0.30))
-                    })
+                trades = [{
+                    'symbol': row.get('Symbol', ''),
+                    'strike': safe_float(row.get('Strike', 0)),
+                    'entry_premium': safe_float(row.get('Entry Premium', 0)),
+                    'current_premium': safe_float(row.get('Current Premium', 0)),
+                    'underlying_price': safe_float(row.get('Current Price', 0)),
+                    'expiration_date': str(row.get('Exp Date', '')),
+                    'current_iv': safe_float(row.get('IV', 0.30))
+                } for row in positions]
 
                 progress_callback(50)
 
@@ -2051,120 +1859,11 @@ def sync_positions_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-def _parse_schwab_occ_symbol(occ_symbol):
-    """
-    Parse Schwab OCC option symbol into components.
-    Format: 'AAPL  260319P00150000' (symbol left-padded to 6 chars)
-    Returns dict with symbol, expiration (YYYY-MM-DD), strike (float), or None on failure.
-    """
-    try:
-        if not occ_symbol or len(occ_symbol) < 15:
-            return None
-        from datetime import datetime as _dt
-        underlying = occ_symbol[:6].strip()
-        rest = occ_symbol[6:]
-        exp_date = _dt.strptime(rest[:6], '%y%m%d').date().isoformat()
-        put_call = rest[6]
-        if put_call not in ('P', 'C'):
-            return None
-        strike = int(rest[7:15]) / 1000.0
-        return {'symbol': underlying, 'expiration': exp_date, 'strike': strike, 'put_call': put_call}
-    except Exception:
-        return None
 
-
-def _get_schwab_csp_positions():
-    """
-    Fetch live short PUT positions from Schwab account via positions API.
-    Returns a list of dicts in the same shape as enrich_trade_with_live_data() output.
-    Falls back to an empty list on any error so the caller can try the sheet fallback.
-    """
-    try:
-        import dotenv as _dotenv
-        _dotenv.load_dotenv()
-        from schwab_utils import get_client
-        from datetime import datetime as _dt, date as _date
-
-        paper_trading = os.getenv('PAPER_TRADING', 'True').lower() == 'true'
-        account_id = os.getenv(
-            'SCHWAB_PAPER_ACCOUNT_ID' if paper_trading else 'SCHWAB_LIVE_ACCOUNT_ID'
-        )
-
-        client = get_client()
-        client.set_enforce_enums(False)
-
-        # Resolve account hash
-        acct_numbers = client.get_account_numbers().json()
-        account_hash = next(
-            (a.get('hashValue') for a in acct_numbers if a.get('accountNumber') == account_id),
-            None,
-        )
-        if not account_hash:
-            logger.warning("_get_schwab_csp_positions: no account hash found")
-            return []
-
-        # Fetch positions
-        pos_resp = client.get_account(account_hash, fields='positions')
-        if pos_resp.status_code != 200:
-            logger.warning(f"Schwab positions returned HTTP {pos_resp.status_code}")
-            return []
-
-        positions = pos_resp.json().get('securitiesAccount', {}).get('positions', [])
-
-        rows = []
-        for pos in positions:
-            instrument = pos.get('instrument', {})
-            if instrument.get('assetType') != 'OPTION':
-                continue
-            if instrument.get('putCall') != 'PUT':
-                continue
-            short_qty = int(pos.get('shortQuantity', 0))
-            if short_qty <= 0:
-                continue
-
-            occ_symbol = instrument.get('symbol', '')
-            parsed = _parse_schwab_occ_symbol(occ_symbol)
-            if not parsed:
-                continue
-
-            underlying = instrument.get('underlyingSymbol', '') or parsed['symbol']
-            avg_price = float(pos.get('averagePrice', 0))   # premium received per share
-            market_value = float(pos.get('marketValue', 0)) # negative for short position
-
-            exp_date_str = parsed['expiration']
-            strike = parsed['strike']
-
-            dte = max((_date.fromisoformat(exp_date_str) - _date.today()).days, 0)
-
-            # Current mark derived from market value (avoids extra API round-trip)
-            current_mark = abs(market_value) / (short_qty * 100) if short_qty > 0 else 0
-            total_credit = avg_price * short_qty * 100
-            pl_dollars = total_credit - abs(market_value)
-            progress_pct = (pl_dollars / total_credit * 100) if total_credit > 0 else 0
-
-            rows.append({
-                'Symbol': underlying,
-                'Strike': strike,
-                'Exp Date': exp_date_str,
-                'Entry Premium': avg_price,
-                'Contracts Qty': short_qty,
-                'Option Symbol': occ_symbol,
-                '_dte': dte,
-                '_current_premium': round(current_mark, 2),
-                '_pl_dollars': round(pl_dollars, 2),
-                '_progress_pct': round(progress_pct, 1),
-                '_total_credit': round(total_credit, 2),
-                '_daily_theta_decay_dollars': 0.0,
-                '_forward_theta_daily': 0.0,
-                '_projected_decay': 0.0,
-            })
-
-        logger.info(f"Fetched {len(rows)} open short PUT positions from Schwab")
-        return rows
-
-    except Exception as e:
-        logger.error(f"_get_schwab_csp_positions failed: {e}", exc_info=True)
-        return []
+# _parse_schwab_occ_symbol and _get_schwab_csp_positions moved to schwab_positions.py
+# Both are imported at the top of this file from schwab_positions.
+# Alias allows internal references to keep working without touching all call sites.
+_get_schwab_csp_positions = get_schwab_csp_positions
 
 
 @app.route('/api/open_csps')
@@ -2200,50 +1899,9 @@ def get_open_csps():
 
         logger.info(f"Fetching fresh Open CSPs data (force_refresh={force_refresh})")
 
-        # --- Primary: Schwab account positions ---
+        # Fetch from Schwab live positions (sole source of truth)
         enriched_rows = _get_schwab_csp_positions()
         data_source = 'schwab'
-
-        # --- Fallback: Google Sheet + live quote enrichment ---
-        if not enriched_rows:
-            logger.info("Schwab positions empty — falling back to Google Sheet")
-            try:
-                import asyncio
-                from open_trade_monitor import load_trades_from_sheet, enrich_trade_with_live_data
-                from schwab_utils import get_client
-
-                df, _ = load_trades_from_sheet()
-                if df is not None and not df.empty:
-                    symbols = df['Symbol'].dropna().unique().tolist()
-                    quotes = {}
-                    if symbols:
-                        try:
-                            client = get_client()
-                            quote_resp = client.get_quotes(symbols)
-                            if quote_resp.status_code == 200:
-                                for sym, data in quote_resp.json().items():
-                                    if 'quote' in data:
-                                        q = data['quote']
-                                        quotes[sym] = {
-                                            'lastPrice': q.get('lastPrice', 0),
-                                            'bidPrice': q.get('bidPrice', 0),
-                                            'askPrice': q.get('askPrice', 0),
-                                            'mark': q.get('mark', q.get('lastPrice', 0)),
-                                        }
-                        except Exception as qe:
-                            logger.warning(f"Sheet fallback quote fetch failed: {qe}")
-
-                    for _, row in df.iterrows():
-                        enriched = enrich_trade_with_live_data(dict(row), quotes)
-                        for key, value in enriched.items():
-                            if hasattr(value, 'strftime'):
-                                enriched[key] = value.strftime('%Y-%m-%d')
-                            elif hasattr(value, 'isoformat'):
-                                enriched[key] = value.isoformat()
-                        enriched_rows.append(enriched)
-                    data_source = 'sheet'
-            except Exception as fe:
-                logger.error(f"Sheet fallback also failed: {fe}")
 
         if not enriched_rows:
             logger.warning("No trades found from Schwab or Sheet")
@@ -2635,7 +2293,6 @@ def get_portfolio_var():
     """
     try:
         from risk_calculator import RiskCalculator, PositionRisk
-        from open_trade_monitor import load_trades_from_sheet
 
         # Get parameters
         confidence = float(request.args.get('confidence', 0.95))
@@ -2645,8 +2302,8 @@ def get_portfolio_var():
 
         logger.info(f"API: Calculating VaR with {confidence*100}% confidence, {time_horizon}d horizon")
 
-        # Load open positions from Google Sheets
-        trades_result = load_trades_from_sheet()
+        # Load open positions from Schwab
+        trades_result = _get_open_positions_compat()
         if not trades_result or trades_result[0] is None or trades_result[0].empty:
             return jsonify({
                 'success': False,
@@ -2722,14 +2379,13 @@ def get_correlation_matrix():
     """
     try:
         from risk_calculator import RiskCalculator, PositionRisk
-        from open_trade_monitor import load_trades_from_sheet
 
         lookback_days = int(request.args.get('lookback_days', 90))
 
         logger.info(f"API: Calculating correlation matrix with {lookback_days}d lookback")
 
-        # Load open positions
-        trades_result = load_trades_from_sheet()
+        # Load open positions from Schwab
+        trades_result = _get_open_positions_compat()
         if not trades_result or trades_result[0] is None or trades_result[0].empty:
             return jsonify({
                 'success': False,
@@ -2799,14 +2455,13 @@ def get_margin_requirements():
     """
     try:
         from risk_calculator import RiskCalculator, PositionRisk
-        from open_trade_monitor import load_trades_from_sheet
 
         account_value = float(request.args.get('account_value', 100000))
 
         logger.info(f"API: Calculating margin requirements")
 
-        # Load open positions
-        trades_result = load_trades_from_sheet()
+        # Load open positions from Schwab
+        trades_result = _get_open_positions_compat()
         if not trades_result or trades_result[0] is None or trades_result[0].empty:
             return jsonify({
                 'success': True,
@@ -2866,15 +2521,14 @@ def get_full_risk_report():
     """
     try:
         from risk_calculator import RiskCalculator, PositionRisk
-        from open_trade_monitor import load_trades_from_sheet
 
         account_value = float(request.args.get('account_value', 100000))
         confidence = float(request.args.get('confidence', 0.95))
 
         logger.info(f"API: Generating full risk report")
 
-        # Load open positions
-        trades_result = load_trades_from_sheet()
+        # Load open positions from Schwab
+        trades_result = _get_open_positions_compat()
         if not trades_result or trades_result[0] is None or trades_result[0].empty:
             return jsonify({
                 'success': False,
@@ -2960,19 +2614,14 @@ def get_current_alerts():
     """
     try:
         from smart_alerts import run_alert_scan
-        from open_trade_monitor import load_trades_from_sheet
 
-        # Load current trades
-        trades_result = load_trades_from_sheet()
-        if trades_result is None:
-            return jsonify({'alerts': [], 'error': 'Could not load trades'})
-
-        df, _ = trades_result
-        if df is None or df.empty:
+        # Load current positions from Schwab
+        positions = get_schwab_csp_positions()
+        if not positions:
             return jsonify({'alerts': [], 'message': 'No open trades'})
 
-        # Convert to dict format
-        trades = df.to_dict('records')
+        # Convert to dict format expected by smart_alerts
+        trades = positions
 
         # Run alert scan
         alerts = run_alert_scan(trades=trades)
@@ -3003,23 +2652,13 @@ def get_risk_report_api():
     """
     try:
         from core.risk_calculator import RiskCalculator
-        from open_trade_monitor import load_trades_from_sheet
 
-        # Load current trades
-        trades_result = load_trades_from_sheet()
-        if trades_result is None:
-            return jsonify({'success': False, 'error': 'Could not load trades'})
+        # Load current trades from Schwab
+        positions = get_schwab_csp_positions()
+        if not positions:
+            return jsonify({'success': True, 'portfolio_heat': 0, 'var_95': 0, 'message': 'No open positions'})
 
-        df, _ = trades_result
-        if df is None or df.empty:
-            return jsonify({
-                'success': True,
-                'portfolio_heat': 0,
-                'var_95': 0,
-                'message': 'No open positions'
-            })
-
-        trades = df.to_dict('records')
+        trades = positions
 
         # Initialize risk calculator
         risk_calc = RiskCalculator(total_capital=25000)  # TODO: Get from config
@@ -3055,23 +2694,12 @@ def get_portfolio_health_api():
     """
     try:
         from core.portfolio_analyzer import PortfolioAnalyzer
-        from open_trade_monitor import load_trades_from_sheet
 
-        # Load current trades
-        trades_result = load_trades_from_sheet()
-        if trades_result is None:
-            return jsonify({'success': False, 'error': 'Could not load trades'})
-
-        df, _ = trades_result
-        if df is None or df.empty:
-            return jsonify({
-                'success': True,
-                'health_score': 100,
-                'status': 'No positions',
-                'message': 'Portfolio is empty'
-            })
-
-        trades = df.to_dict('records')
+        # Load current positions from Schwab
+        trades = get_schwab_csp_positions()
+        if not trades:
+            return jsonify({'success': True, 'health_score': 100, 'status': 'No positions',
+                            'message': 'Portfolio is empty'})
 
         # Initialize analyzer
         analyzer = PortfolioAnalyzer(total_capital=25000)
@@ -3104,22 +2732,12 @@ def get_trade_scores_api():
     """
     try:
         from core.trade_scorer import TradeScorer
-        from open_trade_monitor import load_trades_from_sheet
 
-        # Load current trades
-        trades_result = load_trades_from_sheet()
-        if trades_result is None:
-            return jsonify({'success': False, 'error': 'Could not load trades'})
+        # Load current positions from Schwab
+        trades = get_schwab_csp_positions()
+        if not trades:
+            return jsonify({'success': True, 'scores': [], 'message': 'No open positions'})
 
-        df, _ = trades_result
-        if df is None or df.empty:
-            return jsonify({
-                'success': True,
-                'scores': [],
-                'message': 'No open positions'
-            })
-
-        trades = df.to_dict('records')
         scorer = TradeScorer()
 
         # Score each position
