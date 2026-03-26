@@ -227,7 +227,14 @@ def _score_sector(etf_ticker: str, spy_return_5d: float) -> dict:
         dict with keys: score (0-100), label, etf, components
     """
     try:
-        df = yf.Ticker(etf_ticker).history(period="60d", interval="1d")
+        import socket
+        # Set a timeout for yfinance network calls (default is no timeout)
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(10)
+        try:
+            df = yf.Ticker(etf_ticker).history(period="60d", interval="1d")
+        finally:
+            socket.setdefaulttimeout(old_timeout)
         if df.empty or len(df) < 25:
             return {"score": 50, "label": "Neutral", "etf": etf_ticker, "components": {}, "error": "insufficient data"}
 
@@ -331,7 +338,11 @@ def get_sector_scores(force_refresh: bool = False) -> dict[str, dict]:
             cached_at = datetime.fromisoformat(cached.get("_cached_at", "2000-01-01"))
             if datetime.now() - cached_at < timedelta(hours=CACHE_TTL_HOURS):
                 logger.debug("sector_sentiment cache hit (age %s)", datetime.now() - cached_at)
-                return {k: v for k, v in cached.items() if not k.startswith("_")}
+                # Defensive: ensure structure is valid
+                scores = {k: v for k, v in cached.items() if not k.startswith("_")}
+                if all(isinstance(v, dict) and 'score' in v for v in scores.values()):
+                    return scores
+                logger.warning("sector_sentiment cache invalid structure: %r", scores)
         except Exception as e:
             logger.warning("sector cache read failed: %s", e)
 
@@ -347,8 +358,12 @@ def get_sector_scores(force_refresh: bool = False) -> dict[str, dict]:
     # ── Score all sectors ─────────────────────────────────────────────
     scores: dict[str, dict] = {}
     for sector, etf in SECTOR_ETFS.items():
-        scores[sector] = _score_sector(etf, spy_return_5d)
-        logger.debug("  %s (%s): %d — %s", sector, etf, scores[sector]["score"], scores[sector]["label"])
+        try:
+            scores[sector] = _score_sector(etf, spy_return_5d)
+            logger.debug("  %s (%s): %d — %s", sector, etf, scores[sector]["score"], scores[sector]["label"])
+        except Exception as e:
+            logger.warning("Failed to score sector %s: %s", sector, e)
+            scores[sector] = {"score": 50, "label": "Neutral", "etf": etf, "components": {}, "error": str(e)}
 
     # ── Persist cache ─────────────────────────────────────────────────
     try:

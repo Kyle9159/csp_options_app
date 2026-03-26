@@ -1092,7 +1092,15 @@ def get_portfolio_greeks():
 
         # Convert trades to PositionGreeks objects with live Greeks from Schwab API
         from schwab_utils import get_client
+        from trade_outcome_tracker import get_open_trades
         client = get_client()
+
+        # Build a lookup of SQLite Greeks keyed by (symbol, strike, expiration_iso)
+        _sqlite_trades = get_open_trades()
+        _greeks_lookup = {}
+        for _t in _sqlite_trades:
+            _exp_iso = _t['expiration']  # already YYYY-MM-DD in SQLite
+            _greeks_lookup[(_t['symbol'].upper(), float(_t['strike']), _exp_iso)] = _t
 
         positions = []
         for _, row in df.iterrows():
@@ -1102,27 +1110,29 @@ def get_portfolio_greeks():
                 exp_date = str(row.get('Exp Date', ''))
                 quantity = int(row.get('Quantity', 0))
 
-                # STRATEGY: Try sheet values first, then live API as enhancement
-                # This ensures we always have Greeks even if API fails
+                # Normalise expiration to YYYY-MM-DD for lookup
+                if '/' in exp_date:
+                    exp_iso = datetime.strptime(exp_date, '%m/%d/%Y').strftime('%Y-%m-%d')
+                else:
+                    exp_iso = exp_date
 
-                # Get Greeks from Google Sheets first (primary source)
-                delta_sheet = safe_float(row.get('Delta', 0))
-                gamma_sheet = safe_float(row.get('Gamma', 0))
-                theta_sheet = safe_float(row.get('Theta', 0))
-                vega_sheet = safe_float(row.get('Vega', 0))
+                # STRATEGY: SQLite (periodically updated by update_greeks_from_schwab.py)
+                # is the primary source.  Fall back to live Schwab API quote if zero.
+                sqlite_trade = _greeks_lookup.get((symbol.upper(), strike, exp_iso))
+                if sqlite_trade:
+                    delta = safe_float(sqlite_trade.get('delta', 0))
+                    gamma = safe_float(sqlite_trade.get('gamma', 0))
+                    theta = safe_float(sqlite_trade.get('theta', 0))
+                    vega  = safe_float(sqlite_trade.get('vega', 0))
+                    logger.debug(f"SQLite Greeks for {symbol}: delta={delta:.3f}, theta={theta:.3f}, "
+                                 f"gamma={gamma:.3f}, vega={vega:.3f}")
+                else:
+                    delta = gamma = theta = vega = 0.0
+                    logger.debug(f"No SQLite trade found for {symbol} ${strike}P {exp_iso}")
 
-                # Start with sheet values
-                delta = delta_sheet
-                gamma = gamma_sheet
-                theta = theta_sheet
-                vega = vega_sheet
-
-                logger.debug(f"Sheet Greeks for {symbol}: delta={delta:.3f}, theta={theta:.3f}, "
-                           f"gamma={gamma:.3f}, vega={vega:.3f}")
-
-                # Try to enhance with live API Greeks if sheet values are zero or missing
+                # Try to enhance with live API Greeks if SQLite values are zero or missing
                 if delta == 0 and theta == 0:
-                    logger.info(f"Sheet Greeks are zero for {symbol}, attempting live API fetch...")
+                    logger.info(f"SQLite Greeks are zero for {symbol}, attempting live API fetch...")
                     try:
                         # Parse expiration date from various formats
                         from datetime import datetime as dt
@@ -1165,7 +1175,7 @@ def get_portfolio_greeks():
                     except Exception as e:
                         logger.warning(f"Live API fetch failed for {symbol}: {e}")
                 else:
-                    logger.debug(f"Using sheet Greeks for {symbol} (non-zero values)")
+                    logger.debug(f"Using SQLite Greeks for {symbol} (non-zero values)")
 
                 # Get underlying price from sheet or use 0
                 underlying_price = safe_float(row.get('Current Price', 0))
@@ -1275,26 +1285,41 @@ def get_exit_targets():
                 current_price = safe_float(row.get('Current Price', 0))
                 current_iv = safe_float(row.get('IV', 0.30))
 
-                # Calculate exit targets
+                # Get current regime for regime-linked stop-loss scaling
+                grok_sentiment_val, _ = get_grok_sentiment()
+                # regime_key comes from cached sentiment string (same keys as REGIME_SETTINGS)
+                _valid_regimes = {'STRONG_BULL', 'MILD_BULL', 'NEUTRAL_OR_WEAK', 'CAUTIOUS', 'BEARISH_HIGH_VOL'}
+                regime_key_val = grok_sentiment_val if grok_sentiment_val in _valid_regimes else 'MILD_BULL'
+
+                # Calculate exit targets — pass positional args correctly
                 target = calculate_exit_targets(
-                    entry_premium=entry_premium,
-                    current_premium=current_premium,
+                    current_price=current_price,
+                    entry_price=entry_premium,
+                    position_type="short_put",
                     strike=strike,
-                    underlying_price=current_price,
-                    expiration_date=expiration,
-                    current_iv=current_iv
+                    premium_collected=entry_premium,
+                    iv=current_iv if current_iv > 0 else 0.30,
+                    regime_key=regime_key_val,
                 )
+
+                # Compute simple current P&L pct relative to entry premium
+                current_pnl_pct = 0.0
+                if entry_premium > 0 and current_premium > 0:
+                    current_pnl_pct = round((entry_premium - current_premium) / entry_premium * 100, 1)
 
                 exit_data.append({
                     'symbol': symbol,
                     'strike': strike,
-                    'recommendation': target.recommendation,
-                    'profit_target_pct': target.profit_target_pct,
-                    'stop_loss_pct': target.stop_loss_pct,
-                    'current_pnl_pct': target.current_pnl_pct,
-                    'reasoning': target.reasoning,
-                    'should_roll': target.should_roll,
-                    'context': target.context
+                    'recommendation': target.get('recommendation', ''),
+                    'profit_target': target.get('profit_target', 0),
+                    'profit_target_pct': target.get('profit_target_pct', 50),
+                    'early_exit_target': target.get('early_exit_target', 0),
+                    'stop_loss_price': target.get('stop_loss_price', 0),
+                    'emergency_exit_price': target.get('emergency_exit_price', 0),
+                    'adjustment_trigger_delta': target.get('adjustment_trigger_delta', 0.45),
+                    'adjustment_trigger_dte': target.get('adjustment_trigger_dte', 7),
+                    'current_pnl_pct': current_pnl_pct,
+                    'regime_key': regime_key_val,
                 })
 
             except Exception as e:
@@ -1451,31 +1476,56 @@ def calculate_api_position_size():
     {
         "account_value": 50000,
         "strike_price": 175.0,
-        "grok_score": 8,
-        "win_rate": 65.0
+        "grok_score": 85,
+        "win_rate": 65.0,
+        "existing_sectors": ["Technology", "Technology"]
     }
     """
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
 
-        account_value = data.get('account_value', 50000)
-        strike_price = data.get('strike_price', 100)
-        grok_score = data.get('grok_score')
-        win_rate = data.get('win_rate')
+        account_value = safe_float(data.get('account_value', 50000))
+        strike_price = safe_float(data.get('strike_price', 100))
+        grok_score = safe_float(data.get('grok_score', 70))
+        win_rate = safe_float(data.get('win_rate', 65)) / 100  # normalise to 0-1
+        # existing_sectors: list of sector strings for open positions
+        existing_sectors: list = data.get('existing_sectors', [])
+        new_sector: str = data.get('sector', '')
+        strategy: str = data.get('strategy', 'moderate')
 
         sizing = calculate_position_size(
-            account_value=account_value,
-            strike_price=strike_price,
-            grok_score=grok_score,
-            win_rate=win_rate
+            account_balance=account_value,           # correct param name
+            underlying_price=strike_price,           # correct param name
+            prob_profit=grok_score,                  # maps Grok score → probability kwarg
+            win_rate=win_rate,                       # pass via kwargs
+            strategy=strategy,
         )
 
+        recommended_contracts = sizing.get('recommended_contracts', 1)
+
+        # Correlation-adjusted sizing: cap at 50% if ≥ 2 open positions in same sector
+        sector_concentration_warning = None
+        if new_sector and existing_sectors:
+            same_sector_count = sum(1 for s in existing_sectors if s == new_sector)
+            if same_sector_count >= 2:
+                recommended_contracts = max(1, int(recommended_contracts * 0.5))
+                sector_concentration_warning = (
+                    f"Sector concentration limit: {same_sector_count} existing positions in "
+                    f"'{new_sector}' — contracts halved to {recommended_contracts}"
+                )
+
+        # Capital required = contracts × strike × 100 (CSP margin requirement)
+        capital_required = round(recommended_contracts * strike_price * 100, 2) if strike_price > 0 else 0
+
         return jsonify({
-            'recommended_contracts': sizing.recommended_contracts,
-            'capital_required': sizing.capital_required,
-            'risk_amount': sizing.risk_amount,
-            'confidence_multiplier': sizing.confidence_multiplier,
-            'warnings': sizing.warnings
+            'recommended_contracts': recommended_contracts,
+            'capital_required': capital_required,
+            'position_value': sizing.get('position_value', 0),
+            'risk_amount': sizing.get('risk_amount', 0),
+            'risk_percent': sizing.get('risk_percent', 0),
+            'kelly_fraction': sizing.get('kelly_fraction', 0),
+            'sizing_method': sizing.get('sizing_method', 'Fixed Risk'),
+            'sector_concentration_warning': sector_concentration_warning,
         })
 
     except Exception as e:
@@ -1978,6 +2028,24 @@ def get_regime_history_route():
     except Exception as e:
         logger.error("regime_history error: %s", e)
         return jsonify({'ok': False, 'error': {'code': 'INTERNAL_ERROR', 'message': str(e)}}), 500
+
+
+@app.route('/api/sector_scores')
+def get_sector_scores_route():
+    """Return scored sentiment for all 11 GICS sectors (4-hour cached)."""
+    try:
+        from sector_sentiment import get_sector_scores
+        force = request.args.get('force', 'false').lower() == 'true'
+        scores = get_sector_scores(force_refresh=force)
+        # Defensive: ensure scores is a dict of dicts with 'score' keys
+        if not isinstance(scores, dict) or not all(isinstance(v, dict) and 'score' in v for v in scores.values()):
+            logger.error("sector_scores: invalid scores structure: %r", scores)
+            return jsonify({'ok': False, 'error': {'code': 'INTERNAL_ERROR', 'message': 'Invalid sector scores structure'}}), 500
+        return jsonify({'ok': True, 'data': scores})
+    except Exception as e:
+        logger.error("sector_scores error: %s", e, exc_info=True)
+        # Always return JSON, never HTML
+        return jsonify({'ok': False, 'error': {'code': 'INTERNAL_ERROR', 'message': str(e)}}), 200
 
 
 @app.route('/api/analytics/summary')
@@ -3385,7 +3453,7 @@ if __name__ == '__main__':
     logger.info("=" * 60)
     logger.info("DASHBOARD SERVER STARTING")
     logger.info("=" * 60)
-    logger.info("Server URL: http://127.0.0.1:5000")
+    logger.info("Server URL: http://127.0.0.1:5101")
     logger.info("Features: Live quotes, parallel scanners, Telegram alerts")
     logger.info("")
     logger.info("Phase 3 Endpoints:")
@@ -3507,7 +3575,7 @@ if __name__ == '__main__':
     # For production, use: gunicorn -w 4 -b 0.0.0.0:5000 dashboard_server:app
     app.run(
         host='127.0.0.1',
-        port=5000,
+        port=5101,
         debug=False,
         use_reloader=False,
         threaded=True,   # Enable threading for concurrent requests

@@ -2202,6 +2202,52 @@ def generate_html():
                 loadMarketPulse();
                 </script>
 
+                <!-- Sector Sentiment Heatmap Tile -->
+                <div class="tile" style="grid-column: 1 / -1; background:linear-gradient(135deg,#1e293b,#0f172a); border:2px solid #334155; margin-bottom:40px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; padding:20px 24px 12px 24px;">
+                        <h3 style="color:#e2e8f0; margin:0;">🌐 Sector Sentiment Heatmap</h3>
+                        <button onclick="_loadSectorScores(true)" style="padding:8px 16px; background:#334155; color:#e2e8f0; border:1px solid #475569; border-radius:8px; cursor:pointer; font-size:0.85rem;">
+                            ↻ Refresh
+                        </button>
+                    </div>
+                    <div id="sector-heatmap-content" style="padding:0 24px 24px 24px;">
+                        <p style="color:#94a3b8; text-align:center; padding:20px;">Loading sector scores...</p>
+                    </div>
+                </div>
+
+                <script>
+                function _loadSectorScores(force) {
+                    const container = document.getElementById('sector-heatmap-content');
+                    if (!container) return;
+                    const url = force ? '/api/sector_scores?force=true' : '/api/sector_scores';
+                    fetch(url)
+                        .then(r => r.json())
+                        .then(resp => {
+                            if (!resp.ok) throw new Error(resp.error?.message || 'Failed');
+                            const sectors = resp.data;
+                            const entries = Object.entries(sectors).sort((a, b) => b[1].score - a[1].score);
+                            const cells = entries.map(([name, s]) => {
+                                const score = s.score ?? 50;
+                                const bg = score >= 70 ? 'rgba(16,185,129,0.25)' : score >= 40 ? 'rgba(245,158,11,0.20)' : 'rgba(239,68,68,0.20)';
+                                const border = score >= 70 ? '#10b981' : score >= 40 ? '#f59e0b' : '#ef4444';
+                                const textColor = score >= 70 ? '#34d399' : score >= 40 ? '#fbbf24' : '#f87171';
+                                return `<div style="background:${bg}; border:1px solid ${border}; border-radius:12px; padding:14px 10px; text-align:center; min-width:0;">
+                                    <div style="font-size:0.75rem; color:#94a3b8; font-weight:600; letter-spacing:0.05em;">${s.etf||''}</div>
+                                    <div style="font-size:0.8rem; color:#cbd5e1; margin:4px 0 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${name}</div>
+                                    <div style="font-size:1.6rem; font-weight:800; color:${textColor}; line-height:1;">${score}</div>
+                                    <div style="font-size:0.7rem; color:${textColor}; margin-top:4px;">${s.label||''}</div>
+                                </div>`;
+                            }).join('');
+                            container.innerHTML = `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(110px, 1fr)); gap:10px;">${cells}</div>
+                                <p style="color:#475569; font-size:0.75rem; text-align:right; margin:10px 0 0;">Score: 0–100 ▸ green ≥ 70, amber 40–69, red &lt; 40. Cached 4h.</p>`;
+                        })
+                        .catch(err => {
+                            if (container) container.innerHTML = `<p style="color:#fb923c;text-align:center;padding:20px;">Failed to load sectors: ${err.message}</p>`;
+                        });
+                }
+                _loadSectorScores(false);
+                </script>
+
             <!-- Script Running Buttons (Top-Right Corner) -->
             <div class="script-buttons-container">
                 <button class="script-button" style="background: linear-gradient(135deg, #6366f1, #4f46e5);"
@@ -3950,6 +3996,33 @@ def generate_html():
                                 <p style="color:#94a3b8; text-align:center; padding:20px;">Loading trade history...</p>
                             </div>
                         </div>
+
+                        <!-- Token Cost + Regime History row -->
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-bottom:24px;">
+
+                            <!-- Token Cost Card -->
+                            <div style="background:linear-gradient(135deg, #1e293b, #0f172a); padding:24px; border-radius:20px; border:2px solid #334155;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                                    <h3 style="color:#e2e8f0; margin:0; font-size:1rem;">🪙 Grok Token Cost (Today)</h3>
+                                    <button onclick="_loadTokenCost()" style="padding:4px 10px; background:#334155; color:#e2e8f0; border:1px solid #475569; border-radius:6px; cursor:pointer; font-size:0.8rem;">↻</button>
+                                </div>
+                                <div id="token-cost-content">
+                                    <p style="color:#94a3b8; text-align:center; padding:12px;">Loading...</p>
+                                </div>
+                            </div>
+
+                            <!-- Regime History Timeline -->
+                            <div style="background:linear-gradient(135deg, #1e293b, #0f172a); padding:24px; border-radius:20px; border:2px solid #334155;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                                    <h3 style="color:#e2e8f0; margin:0; font-size:1rem;">📊 Regime History</h3>
+                                    <button onclick="_loadRegimeHistory()" style="padding:4px 10px; background:#334155; color:#e2e8f0; border:1px solid #475569; border-radius:6px; cursor:pointer; font-size:0.8rem;">↻</button>
+                                </div>
+                                <div id="regime-history-content" style="max-height:260px; overflow-y:auto;">
+                                    <p style="color:#94a3b8; text-align:center; padding:12px;">Loading...</p>
+                                </div>
+                            </div>
+
+                        </div>
                     </div>
 
                     <!-- Portfolio Greeks Sub-tab -->
@@ -4159,6 +4232,8 @@ def generate_html():
                         _loadAnalyticsSummary();
                         _loadAnalyticsOpen();
                         _loadAnalyticsHistory();
+                        _loadTokenCost();
+                        _loadRegimeHistory();
                     }
 
                     function _loadAnalyticsSummary() {
@@ -4213,16 +4288,31 @@ def generate_html():
                                     const pl = parseFloat(t._pl_dollars || 0);
                                     const plColor = pl >= 0 ? '#34d399' : '#fb923c';
                                     const plSign = pl >= 0 ? '+' : '';
+                                    const dte = t._dte ?? null;
+                                    const ern = t._earnings_risk;
+                                    const dte_earn = t._days_to_earnings;
+                                    // Earnings badge: red ⚠️ if risk flag, amber warning if < 30d
+                                    const earnBadge = ern
+                                        ? `<span title="Earnings within 14 days" style="color:#ef4444;font-weight:700;">⚠️ ${dte_earn != null ? dte_earn+'d' : ''}</span>`
+                                        : (dte_earn != null && dte_earn < 30)
+                                            ? `<span title="Earnings in ${dte_earn} days" style="color:#94a3b8;font-size:0.8rem;">📅 ${dte_earn}d</span>`
+                                            : '';
+                                    // Roll badge: DTE < 21 AND P/L negative
+                                    const rollBadge = (dte !== null && dte < 21 && pl < 0)
+                                        ? '<span title="Consider rolling: low DTE + at a loss" style="color:#f59e0b;font-weight:700;">🔄</span>'
+                                        : '';
                                     return `<tr style="border-bottom:1px solid #334155;">
                                         <td style="padding:12px;font-weight:600;">${t.Symbol}</td>
                                         <td style="padding:12px;text-align:right;">$${parseFloat(t.Strike||0).toFixed(2)}</td>
                                         <td style="padding:12px;text-align:right;">${t['Exp Date']||''}</td>
-                                        <td style="padding:12px;text-align:right;">${t._dte ?? 'N/A'}</td>
+                                        <td style="padding:12px;text-align:right;">${dte ?? 'N/A'}</td>
                                         <td style="padding:12px;text-align:right;">${t['Contracts Qty']||1}</td>
                                         <td style="padding:12px;text-align:right;color:#34d399;">$${parseFloat(t['Entry Premium']||0).toFixed(2)}</td>
                                         <td style="padding:12px;text-align:right;color:#60a5fa;">$${parseFloat(t._current_premium||0).toFixed(2)}</td>
                                         <td style="padding:12px;text-align:right;color:${plColor};font-weight:600;">${plSign}$${Math.abs(pl).toFixed(0)}</td>
                                         <td style="padding:12px;text-align:right;color:#fbbf24;font-weight:600;">${parseFloat(t._progress_pct||0).toFixed(0)}%</td>
+                                        <td style="padding:12px;text-align:center;">${earnBadge}</td>
+                                        <td style="padding:12px;text-align:center;">${rollBadge}</td>
                                     </tr>`;
                                 }).join('');
                                 container.innerHTML = `
@@ -4239,6 +4329,8 @@ def generate_html():
                                                     <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Current $</th>
                                                     <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">P/L</th>
                                                     <th style="padding:12px;text-align:right;color:#94a3b8;font-weight:600;">Progress</th>
+                                                    <th style="padding:12px;text-align:center;color:#94a3b8;font-weight:600;" title="Earnings proximity">Earn</th>
+                                                    <th style="padding:12px;text-align:center;color:#94a3b8;font-weight:600;" title="Roll alert">Roll</th>
                                                 </tr>
                                             </thead>
                                             <tbody>${rows}</tbody>
@@ -4312,6 +4404,79 @@ def generate_html():
                             })
                             .catch(err => {
                                 if (container) container.innerHTML = `<p style="color:#fb923c;text-align:center;padding:20px;">Failed to load history: ${err.message}</p>`;
+                            });
+                    }
+
+                    function _loadTokenCost() {
+                        const container = document.getElementById('token-cost-content');
+                        if (!container) return;
+                        fetch('/api/token_cost')
+                            .then(r => r.json())
+                            .then(resp => {
+                                if (!resp.ok) throw new Error(resp.error?.message || 'Failed');
+                                const d = resp.data;
+                                const total = d.total_cost_usd ?? 0;
+                                const totalColor = total < 0.5 ? '#34d399' : total < 2 ? '#fbbf24' : '#ef4444';
+                                const tiers = [
+                                    { label: 'Fast',      key: 'fast',      color: '#60a5fa' },
+                                    { label: 'Mid',       key: 'mid',       color: '#a78bfa' },
+                                    { label: 'Reasoning', key: 'reasoning', color: '#f59e0b' },
+                                ];
+                                const rows = tiers.map(t => {
+                                    const tok_in  = d[t.key + '_tokens_in']  ?? 0;
+                                    const tok_out = d[t.key + '_tokens_out'] ?? 0;
+                                    const cost    = d[t.key + '_cost_usd']   ?? 0;
+                                    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #1e293b;">
+                                        <span style="color:${t.color};font-weight:600;min-width:80px;">${t.label}</span>
+                                        <span style="color:#94a3b8;font-size:0.8rem;">${(tok_in+tok_out).toLocaleString()} tok</span>
+                                        <span style="color:#e2e8f0;font-size:0.85rem;font-weight:600;">$${cost.toFixed(4)}</span>
+                                    </div>`;
+                                }).join('');
+                                container.innerHTML = `
+                                    ${rows}
+                                    <div style="padding-top:10px;text-align:right;">
+                                        <span style="font-size:0.8rem;color:#94a3b8;">Total: </span>
+                                        <span style="font-size:1.25rem;font-weight:800;color:${totalColor};">$${total.toFixed(4)}</span>
+                                    </div>
+                                    <p style="color:#475569;font-size:0.7rem;margin:6px 0 0;text-align:right;">Resets on server restart</p>`;
+                            })
+                            .catch(err => {
+                                if (container) container.innerHTML = `<p style="color:#fb923c;font-size:0.85rem;padding:8px;">Error: ${err.message}</p>`;
+                            });
+                    }
+
+                    function _loadRegimeHistory() {
+                        const container = document.getElementById('regime-history-content');
+                        if (!container) return;
+                        fetch('/api/regime_history?limit=15')
+                            .then(r => r.json())
+                            .then(resp => {
+                                if (!resp.ok) throw new Error(resp.error?.message || 'Failed');
+                                const entries = resp.data;
+                                if (!entries || entries.length === 0) {
+                                    container.innerHTML = '<p style="color:#94a3b8;font-size:0.85rem;text-align:center;padding:12px;">No regime changes logged yet.</p>';
+                                    return;
+                                }
+                                const COLORS = {
+                                    STRONG_BULL:      { bg:'rgba(52,211,153,0.2)',  border:'#34d399', text:'#34d399'  },
+                                    MILD_BULL:        { bg:'rgba(6,182,212,0.2)',   border:'#06b6d4', text:'#22d3ee'  },
+                                    NEUTRAL_OR_WEAK:  { bg:'rgba(148,163,184,0.15)',border:'#94a3b8', text:'#94a3b8'  },
+                                    CAUTIOUS:         { bg:'rgba(245,158,11,0.2)',  border:'#f59e0b', text:'#fbbf24'  },
+                                    BEARISH_HIGH_VOL: { bg:'rgba(239,68,68,0.2)',  border:'#ef4444', text:'#f87171'  },
+                                };
+                                const rows = entries.map(e => {
+                                    const c = COLORS[e.regime_key] || COLORS.NEUTRAL_OR_WEAK;
+                                    const dt = e.logged_at ? e.logged_at.slice(0, 16).replace('T', ' ') : '';
+                                    const label = (e.regime_key || '').replace(/_/g, ' ');
+                                    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 4px;border-bottom:1px solid #1e293b;">
+                                        <span style="color:#64748b;font-size:0.75rem;white-space:nowrap;">${dt}</span>
+                                        <span style="background:${c.bg};border:1px solid ${c.border};color:${c.text};padding:2px 10px;border-radius:12px;font-size:0.75rem;font-weight:700;letter-spacing:0.03em;">${label}</span>
+                                    </div>`;
+                                }).join('');
+                                container.innerHTML = rows;
+                            })
+                            .catch(err => {
+                                if (container) container.innerHTML = `<p style="color:#fb923c;font-size:0.85rem;padding:8px;">Error: ${err.message}</p>`;
                             });
                     }
                     </script>

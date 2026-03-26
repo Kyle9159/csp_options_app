@@ -92,6 +92,10 @@ def init_db():
                 schwab_order_id TEXT,
                 schwab_close_order_id TEXT,
                 notes TEXT DEFAULT '',
+                delta REAL DEFAULT 0,
+                gamma REAL DEFAULT 0,
+                theta REAL DEFAULT 0,
+                vega REAL DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now'))
             );
@@ -123,6 +127,20 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_regime_log_at
                 ON regime_log(logged_at DESC);
         """)
+    # Migrate existing databases: add Greek columns to trades if they're missing
+    with get_db() as conn:
+        for col_def in [
+            "delta REAL DEFAULT 0",
+            "gamma REAL DEFAULT 0",
+            "theta REAL DEFAULT 0",
+            "vega REAL DEFAULT 0",
+        ]:
+            col_name = col_def.split()[0]
+            try:
+                conn.execute(f"ALTER TABLE trades ADD COLUMN {col_def}")
+                logger.debug("Added column '%s' to trades table", col_name)
+            except sqlite3.OperationalError:
+                pass  # column already exists
     logger.info("Trade outcome DB initialized")
 
 

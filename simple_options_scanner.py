@@ -38,8 +38,8 @@ from datetime import datetime, timedelta
 import pytz
 from ta.momentum import RSIIndicator
 from ta.trend import SMAIndicator, MACD as MACDIndicator
-from telegram import Bot as telegram_bot
-from grok_utils import get_grok_opportunity_analysis, get_grok_sentiment_cached, parse_grok_batch_response
+from grok_utils import get_grok_opportunity_analysis, get_grok_sentiment_cached
+from telegram_utils import send_alert as _send_alert_impl
 from helper_functions import save_cached_scanner, load_sr_cache, save_sr_cache
 from schwab_utils import get_client
 from sector_sentiment import get_sector_scores, get_symbol_sector, get_symbol_sector_score
@@ -207,25 +207,31 @@ OTM_BUFFER_BY_REGIME = {
 }
 
 # ==================== TELEGRAM ====================
-SIMPLE_OPTIONS_SCANNER_TELEGRAM_TOKEN = os.getenv('SIMPLE_OPTIONS_SCANNER_TELEGRAM_TOKEN')
-SIMPLE_OPTIONS_SCANNER_CHAT_ID = 7972059629
-simple_bot = telegram_bot(token=SIMPLE_OPTIONS_SCANNER_TELEGRAM_TOKEN) if SIMPLE_OPTIONS_SCANNER_TELEGRAM_TOKEN else None
-
 captured_opportunities = []
 
 async def send_alert(message):
-    if not simple_bot:
-        print("   (Telegram disabled)")
-        return
-    try:
-        await simple_bot.send_message(
-            chat_id=SIMPLE_OPTIONS_SCANNER_CHAT_ID,
-            text=message,
-            disable_web_page_preview=True
-        )
-        print("   Telegram sent.")
-    except Exception as e:
-        print(f"   Telegram failed: {e}")
+    await _send_alert_impl("scanner", message)
+
+# ==================== GROK BATCH SCORING SYSTEM PROMPT ====================
+_BATCH_SYSTEM_PROMPT = (
+    "You are a quantitative CSP analyst rating wheel-strategy put-selling opportunities.\n"
+    "Score each 0-100 using these priorities (highest to lowest):\n"
+    "1. Safety: delta best=.20-.30, penalize>.38; OTM best=10%+, penalize<7%; earnings>14d required\n"
+    "2. Yield: annualized ROI — reward but never at expense of safety\n"
+    "3. DTE: best=25-45d, penalize<14 or >60\n"
+    "4. IV: best=60-100%, penalize<40% or >130%; bonus if IV>HV by 20%+\n"
+    "5. RSI<50 = oversold bonus; rebound_score 10+/15 = bonus\n"
+    "6. Tier 1 preferred, Tier 2 ok, Tier 3 only in strong bull\n"
+    "7. S/R: 'Low (well below 3m support)'=boost, 'High'=penalty\n"
+    "8. WARN:stock<20%above52wLow = falling knife penalty\n"
+    "9. Liquidity: oi>500 and spread<5% = bonus; macd=bullish_crossover = bonus\n"
+    "Score bands: 90-100=Exceptional, 80-89=Strong, 70-79=Good, 60-69=Average, <60=Avoid\n"
+    "Recommendation MUST be exactly one of: 'Enter Now', 'Strong Enter', 'Consider Entering', 'Hold/Monitor', 'Avoid'\n"
+    "Reason: 25-50 words covering ROI, safety factors, technical signals, S/R context.\n"
+    "Return ONLY valid JSON — no markdown, no extra text:\n"
+    '{"opportunities": [{"idx": <int>, "score": <int 0-100>, "recommendation": "<str>", "reason": "<str>"}]}\n'
+    "Include ALL opportunities in order."
+)
 
 # ==================== COMPANY NAME HELPER ====================
 def get_company_name(symbol):
@@ -239,6 +245,9 @@ def get_company_name(symbol):
 
 # ==================== REGIME DETECTION ====================
 async def get_current_regime():
+    """Returns dict: {"regime": str, "vix_ratio": float}
+    vix_ratio = VIX / VIX3M  (>1 = backwardation/fear, <1 = contango/calm)
+    """
     try:
         vix = yf.Ticker("^VIX").history(period="5d")['Close'].iloc[-1]
         spy = yf.Ticker("SPY").history(period="220d")
@@ -248,27 +257,34 @@ async def get_current_regime():
 
         # VIX term structure: VIX > VIX3M (backwardation) = genuine fear signal
         vix_backwardation = False
+        vix_ratio = 1.0  # neutral default
         try:
             vix3m = yf.Ticker("^VIX3M").history(period="5d")['Close'].iloc[-1]
+            if vix3m > 0:
+                vix_ratio = round(vix / vix3m, 3)
             vix_backwardation = vix > vix3m
             if vix_backwardation:
-                print(f"   VIX term structure: BACKWARDATION (VIX {vix:.1f} > VIX3M {vix3m:.1f}) — elevated fear")
+                print(f"   VIX term structure: BACKWARDATION (VIX {vix:.1f} > VIX3M {vix3m:.1f}) — elevated fear | ratio={vix_ratio:.3f}")
+            else:
+                print(f"   VIX term structure: CONTANGO (VIX {vix:.1f} < VIX3M {vix3m:.1f}) — calm | ratio={vix_ratio:.3f}")
         except Exception:
             pass  # VIX3M data not always available
 
         if vix > 35:
-            return "BEARISH_HIGH_VOL"
+            regime = "BEARISH_HIGH_VOL"
         elif vix > 25 or (vix > 20 and vix_backwardation):
-            return "CAUTIOUS"
+            regime = "CAUTIOUS"
         elif current_price > sma200 * 1.05 and not vix_backwardation:
-            return "STRONG_BULL"
+            regime = "STRONG_BULL"
         elif current_price > sma200:
-            return "MILD_BULL"
+            regime = "MILD_BULL"
         else:
-            return "NEUTRAL_OR_WEAK"
+            regime = "NEUTRAL_OR_WEAK"
+
+        return {"regime": regime, "vix_ratio": vix_ratio}
     except Exception as e:
         print(f"   Regime detection failed: {e}. Defaulting to MILD_BULL.")
-        return "MILD_BULL"
+        return {"regime": "MILD_BULL", "vix_ratio": 1.0}
 
 # ==================== HELPERS ====================
 def get_symbol_tier(symbol):
@@ -1003,11 +1019,21 @@ def improved_put_score(premium, delta, dte, annualized_roi, iv, vol_surge, rsi, 
     else:
         iv_rank_mult = 0.90  # Historically cheap vol — avoid
 
+    # VIX term structure multiplier (vix_ratio = VIX / VIX3M)
+    # >1 = backwardation/fear (penalize), <0.85 = deep contango/calm (reward)
+    vix_term_ratio = kwargs.get('vix_term_ratio', 1.0)
+    if vix_term_ratio < 0.85:
+        vix_term_mult = 1.08   # Deep contango — calm market, good for CSPs
+    elif vix_term_ratio > 1.05:
+        vix_term_mult = 0.93   # Backwardation — elevated fear, increase caution
+    else:
+        vix_term_mult = 1.0    # Neutral term structure
+
     # Apply all multipliers
     score = (base * iv_mult * dte_mult * vol_mult * rsi_mult * trend_mult *
              distance_mult * tier_mult * sr_mult * regime_mult * capital_mult *
              rebound_mult * quality_mult * liquidity_mult * macd_mult * rs_mult *
-             sector_mult * iv_rank_mult)
+             sector_mult * iv_rank_mult * vix_term_mult)
 
     # Safety-first: score is pure multiplier output, annualized ROI is a minor bonus
     # (was: score * 8 + annualized_roi * 2) / 2 — gave too much weight to raw yield)
@@ -1067,7 +1093,9 @@ async def main():
     print("STARTING Simple Options SCANNER")
     print("="*70)
 
-    regime_key = await get_current_regime()
+    _regime_result = await get_current_regime()
+    regime_key = _regime_result["regime"]
+    vix_ratio = _regime_result["vix_ratio"]
     regime = REGIME_SETTINGS[regime_key]
     grok_sentiment, grok_summary = get_grok_sentiment_cached()
 
@@ -1232,7 +1260,8 @@ async def main():
         rebound_score=x.get('rebound_score', 0),
         quality_signals=x.get('quality_signals', {}),
         open_interest=x.get('open_interest', 0),
-        bid_ask_spread_pct=x.get('bid_ask_spread_pct', 0)
+        bid_ask_spread_pct=x.get('bid_ask_spread_pct', 0),
+        vix_term_ratio=vix_ratio,
     ), reverse=True)
 
     # Sector concentration cap: max 2 recommendations per GICS sector
@@ -1274,7 +1303,8 @@ async def main():
             rebound_score=opp.get('rebound_score', 0),
             quality_signals=opp.get('quality_signals', {}),
             open_interest=opp.get('open_interest', 0),
-            bid_ask_spread_pct=opp.get('bid_ask_spread_pct', 0)
+            bid_ask_spread_pct=opp.get('bid_ask_spread_pct', 0),
+            vix_term_ratio=vix_ratio,
         )
         top_10_msg += (
             f"#{i} {opp['symbol']} — {opp['dte']} DTE ${opp['strike']:.0f}P\n"
@@ -1317,209 +1347,71 @@ async def main():
             
             opp['sr_risk_flag'] = sr_risk
 
-        # STRONGER PROMPT: Force exact format + numbering for fallback
-        full_prompt = f"""
-            You are an expert options trader specializing in cash-secured puts and the wheel strategy.
-
-            Analyze these {len(batch)} put opportunities in the current regime:
-            Regime: {regime['name']} (prioritize downside protection in cautious/bearish regimes)
-            Grok Sentiment: {grok_sentiment.replace('_', ' ')}
-
-            KEY PRIORITIES (in rough order of importance):
-                1. Safety (MOST IMPORTANT for profit retention):
-                    - Lower delta: BEST = .20-.30 delta, GOOD = .31-.37 delta, PENALIZE > .38 delta
-                    - Further OTM distance: BEST = 10%+ OTM, GOOD = 7%-9.9% OTM, PENALIZE < 7% OTM
-                    - Strike well below 3-month support level
-                    - Earnings > 14 days away (< 14 days = major penalty, < 7 days = reject)
-                2. Premium yield + Annualized ROI (reward but never at expense of safety)
-                3. DTE: BEST = 25–45 days (peak score), GOOD = 14-25 or 46–60 days, PENALIZE <14 or >60 days
-                4. IV: BEST = 60–100% (high premium without extreme risk), GOOD = 50–60% or 100–120%, PENALIZE <40% (low yield) or >130% (meme/crash risk)
-                5. IV Premium: BONUS if IV > HV by 20%+ (selling overpriced options)
-                6. RSI: Lower/oversold = better entry (bonus if <50)
-                7. Rebound Score: Higher = better timing (10+/15 = excellent, 7-9/15 = good)
-                8. Tier 1 stocks preferred, followed by Tier 2; Tier 3 only in strong bullish regimes with safe setups
-                9. S/R Risk: "Low (well below 3m support)" = big boost, "High" = penalty
-                10. Quality Warnings:
-                    - Stock < 20% above 52w low = falling knife risk (penalty)
-                11. Liquidity: Higher OI (500+) and tighter spread (<5%) = better execution
-                12. MACD: Bullish crossover or turning positive = momentum bonus
-                13. Relative Strength: Underperforming SPY by 3-7% = ideal (stock-specific dip)
-
-            Score guide (0–100):
-            - 90–100: Exceptional wheel setup (high yield + very safe)
-            - 80–89: Strong (great premium + good safety)
-            - 70–79: Good (solid but minor flaws)
-            - 60–69: Average (ok but not exciting)
-            - <60: Weak/Avoid
-
-            CRITICAL: For RECOMMENDATION, you MUST use ONLY one of these exact phrases. No variations allowed:
-
-            - Enter Now          → Best opportunities (high score, safe)
-            - Strong Enter       → Very good, aggressive entry
-            - Consider Entering  → Decent but with caveats
-            - Hold/Monitor       → Neutral, wait for better setup
-            - Avoid              → Poor risk/reward
-
-            CRITICAL FORMATTING REQUIREMENT FOR REASON:
-
-            Your REASON field MUST be AT LEAST 25 WORDS. Single-word or short responses will be rejected.
-
-            Write 2-4 complete sentences (minimum 25 words, target 40-50 words) that explain:
-
-            Sentence 1: Lead with the ROI (e.g., "Strong 40% annualized return with...") and primary safety factor (delta/distance/S&R)
-            Sentence 2: Mention 2-3 key technical signals (RSI level, IV context, DTE appropriateness)
-            Sentence 3: Note support/resistance context and any risk considerations
-            Optional Sentence 4: Company/sector sentiment if relevant
-
-            EXAMPLE GOOD REASON:
-            "Excellent 54% annualized ROI with strong safety buffer - 0.22 delta and 16% OTM provide solid downside protection. RSI at 60 shows healthy momentum without overbought risk, while 98% IV offers strong premium. Strike sits well below 3-month support at $350, giving substantial cushion even in pullback scenarios."
-
-            EXAMPLE BAD REASON (TOO SHORT):
-            "Outstanding" ❌ REJECTED
-            "Good setup" ❌ REJECTED
-
-            Respond in EXACT format. One block per opportunity. No extra text, no explanations outside blocks.
-
-            """
-
+        # Build compact per-opportunity data for JSON prompt
+        user_lines = [
+            f"Regime: {regime['name']} | Sentiment: {grok_sentiment.replace('_', ' ')}",
+            f"Score ALL {len(batch)} opportunities below and return them in the JSON array:\n",
+        ]
         for idx, opp in enumerate(batch, 1):
-            # === Support/Resistance Multi-Timeframe Display ===
-            sr_risk = opp.get('sr_risk_flag', 'Unknown')
-
-            # === Get new signals for this opportunity ===
             quality = opp.get('quality_signals', {})
             rebound = opp.get('rebound_signals', {})
-
-            # Build quality context string
-            quality_str = ""
-            if quality.get('warnings'):
-                quality_str += f"\n                ⚠️ WARNINGS: {', '.join(quality['warnings'])}"
+            warnings = quality.get('warnings', [])
+            extras = []
             if quality.get('days_to_earnings'):
-                quality_str += f"\n                Earnings: {quality['days_to_earnings']} days away"
+                extras.append(f"earns={quality['days_to_earnings']}d")
             if quality.get('iv_premium_pct') is not None:
-                quality_str += f"\n                IV Premium: {quality['iv_premium_pct']}% (IV vs HV)"
-            if quality.get('distance_from_52w_low_pct'):
-                quality_str += f"\n                Distance from 52w Low: {quality['distance_from_52w_low_pct']}%"
+                extras.append(f"ivprem={quality['iv_premium_pct']}%")
             if quality.get('macd_status'):
-                quality_str += f"\n                MACD: {quality['macd_status']}"
+                extras.append(f"macd={quality['macd_status']}")
             if quality.get('relative_strength') is not None:
-                quality_str += f"\n                vs SPY (5d): {quality['relative_strength']}%"
-
-            # Build rebound context string
-            rebound_str = ""
+                extras.append(f"vs_spy={quality['relative_strength']}%")
             if rebound.get('total_score'):
-                rebound_str += f"\n                Rebound Score: {rebound['total_score']}/15"
-                if rebound.get('drawdown_pct'):
-                    rebound_str += f" | Drawdown: {rebound['drawdown_pct']}%"
-                if rebound.get('consecutive_red_days'):
-                    rebound_str += f" | Red Days: {rebound['consecutive_red_days']}"
-
-            # Liquidity info
-            liquidity_str = ""
+                extras.append(f"rebound={rebound['total_score']}/15")
             if opp.get('open_interest'):
-                liquidity_str += f"\n                Open Interest: {opp['open_interest']:,}"
-            if opp.get('volume') is not None:
-                liquidity_str += f" | Volume: {opp['volume']}"
+                extras.append(f"oi={opp['open_interest']:,}")
             if opp.get('bid_ask_spread_pct'):
-                liquidity_str += f" | Spread: {opp['bid_ask_spread_pct']:.1f}%"
-
-            # === Append Opportunity Details ===
-            full_prompt += f"""
-                --- OPPORTUNITY {idx} ---
-                Symbol: {opp['symbol']}
-                Underlying Price: ${opp['current_price']:.2f}
-                Strike: ${opp['strike']:.0f} PUT
-                DTE: {opp['dte']}
-                Premium: ${opp['premium']:.2f}
-                Annualized ROI: {opp['annualized_roi']:.1f}%
-                Delta: {opp['delta']:.2f}
-                IV: {opp['iv']:.0f}%
-                RSI: {opp['rsi']:.1f}
-                Distance OTM: {opp['distance']:.1f}%
-                Tier: {opp.get('tier', 3)}
-                S/R Risk (vs 3m support): {sr_risk}{rebound_str}{quality_str}{liquidity_str}
-
-                SCORE: [Your 0-100 score here]
-                RECOMMENDATION: [MUST be one of: Enter Now, Strong Enter, Consider Entering, Hold/Monitor, Avoid]
-                REASON: [MINIMUM 25 WORDS - Write 2-4 complete sentences explaining ROI, safety metrics, technical factors, rebound potential, quality warnings, and liquidity with specific numbers]
-                --- END ---
-                """
+                extras.append(f"spread={opp['bid_ask_spread_pct']:.1f}%")
+            extras_str = " | " + " | ".join(extras) if extras else ""
+            warn_str = f" | WARN:{','.join(warnings)}" if warnings else ""
+            user_lines.append(
+                f"{idx}. {opp['symbol']} ${opp['strike']:.0f}P | DTE={opp['dte']} | prem=${opp['premium']:.2f}"
+                f" | roi={opp['annualized_roi']:.1f}% | delta={opp['delta']:.2f} | iv={opp['iv']:.0f}%"
+                f" | rsi={opp['rsi']:.1f} | otm={opp['distance']:.1f}% | tier={opp.get('tier', 3)}"
+                f" | sr={opp.get('sr_risk_flag', '?')}{extras_str}{warn_str}"
+            )
+        user_content = "\n".join(user_lines)
 
         try:
-            # Use call_grok for proper system prompt, usage tracking, and model routing
             from grok_utils import call_grok, MODEL_FAST
             response = call_grok(
-                [{"role": "system", "content": "You are a quantitative CSP analyst. Follow the format exactly."},
-                 {"role": "user", "content": full_prompt}],
+                [
+                    {"role": "system", "content": _BATCH_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
                 model=MODEL_FAST,
                 max_tokens=2000,
+                json_mode=True,
             ) or ""
-            # print(f"DEBUG: Batch {i//BATCH_SIZE + 1} raw response:\n{response}\n")
         except Exception as e:
-            print(f"Batch failed: {e}")
+            print(f"Batch Grok call failed: {e}")
             response = ""
 
+        # Parse JSON response; fall back gracefully on invalid JSON
         try:
-            blocks = parse_grok_batch_response(response, len(batch))
-        except Exception as e:
-            print(f"Parsing completely failed: {e}")
-            blocks = []
+            parsed_json = json.loads(response)
+            opportunities_json = parsed_json.get("opportunities", [])
+        except json.JSONDecodeError as e:
+            logging.warning(f"[GROK batch {i//BATCH_SIZE + 1}] JSON parse failed: {e}. Raw: {response[:300]}")
+            opportunities_json = []
 
-        # Assign to batch (in order)
-        for j in range(min(len(blocks), len(batch))):
-            block = blocks[j]
-            opp = batch[j].copy()
+        # Map JSON results back to opportunity dicts
+        json_by_idx = {item.get("idx", j + 1): item for j, item in enumerate(opportunities_json)}
 
-            score = 0
-            recommendation = "Avoid"
-            reason = "Analysis failed"
-
-            block_lines = [l.strip() for l in block.split('\n') if l.strip()]
-            reason_lines = []
-            capturing_reason = False
-
-            for line in block_lines:
-                low_line = line.lower()
-
-                # Stop capturing reason when we hit a new field or END marker
-                if capturing_reason:
-                    if low_line.startswith(("score:", "recommendation:", "---")) or "end" in low_line:
-                        capturing_reason = False
-                    else:
-                        reason_lines.append(line)
-                        continue
-
-                if low_line.startswith("score:"):
-                    try:
-                        score = int(line.split(":")[1].strip().split("/")[0].strip())
-                    except:
-                        pass
-                elif low_line.startswith("recommendation:"):
-                    recommendation = line.split(":", 1)[1].strip()
-                elif low_line.startswith("reason:"):
-                    # Start capturing reason - may span multiple lines
-                    first_part = line.split(":", 1)[1].strip()
-                    if first_part:
-                        reason_lines.append(first_part)
-                    capturing_reason = True
-
-            # Join all reason lines into a single string
-            if reason_lines:
-                reason = " ".join(reason_lines).strip()
-
-            # If reason is still too short (single word), try to extract more context
-            if len(reason.split()) < 5:
-                # Check if there's more text in the block that might be the reason
-                full_text = " ".join(block_lines)
-                if "REASON:" in full_text.upper():
-                    reason_start = full_text.upper().find("REASON:")
-                    reason_text = full_text[reason_start + 7:].strip()
-                    # Stop at next field marker
-                    for marker in ["SCORE:", "RECOMMENDATION:", "---", "END"]:
-                        if marker in reason_text.upper():
-                            reason_text = reason_text[:reason_text.upper().find(marker)].strip()
-                    if len(reason_text) > len(reason):
-                        reason = reason_text
+        for j, opp in enumerate(batch):
+            item = json_by_idx.get(j + 1, {})
+            score = int(item.get("score", 0))
+            recommendation = str(item.get("recommendation", "Avoid")).strip()
+            reason = str(item.get("reason", "Analysis failed")).strip()
 
             badge = "⚠️"
             if score >= 90: badge = "🔥"
@@ -1539,20 +1431,87 @@ async def main():
             })
             batched_results.append(opp)
 
-        # If Grok skipped some, fill with defaults (rare)
-        for j in range(len(blocks), len(batch)):
-            opp = batch[j].copy()
-            opp.update({
-                'grok_trade_score': 0,
-                'score_badge': "⚠️",
-                'grok_recommendation': "Avoid",
-                'grok_reason': "Grok skipped analysis",
-            })
-            batched_results.append(opp)
+        # (all opportunities handled in the loop above via json_by_idx fallback)
 
         await asyncio.sleep(1.5)
 
     top_opps = batched_results
+
+    # === MID RE-SCORE: Re-score top 20 FAST scorers with MODEL_MID for higher accuracy ===
+    _TOP_N_MID = 20
+    top_by_fast = sorted(top_opps, key=lambda x: x.get('grok_trade_score', 0), reverse=True)
+    mid_candidates = top_by_fast[:_TOP_N_MID]
+    if mid_candidates:
+        print(f"Re-scoring top {len(mid_candidates)} with MODEL_MID for higher-accuracy evaluation...")
+        mid_lines = [
+            f"Regime: {regime['name']} | Sentiment: {grok_sentiment.replace('_', ' ')}",
+            f"Score ALL {len(mid_candidates)} opportunities below (deep analysis) and return them in the JSON array:\n",
+        ]
+        for idx, opp in enumerate(mid_candidates, 1):
+            quality = opp.get('quality_signals', {})
+            rebound = opp.get('rebound_signals', {})
+            warnings = quality.get('warnings', [])
+            extras = []
+            if quality.get('days_to_earnings'):
+                extras.append(f"earns={quality['days_to_earnings']}d")
+            if quality.get('iv_premium_pct') is not None:
+                extras.append(f"ivprem={quality['iv_premium_pct']}%")
+            if quality.get('macd_status'):
+                extras.append(f"macd={quality['macd_status']}")
+            if quality.get('relative_strength') is not None:
+                extras.append(f"vs_spy={quality['relative_strength']}%")
+            if rebound.get('total_score'):
+                extras.append(f"rebound={rebound['total_score']}/15")
+            if opp.get('open_interest'):
+                extras.append(f"oi={opp['open_interest']:,}")
+            if opp.get('bid_ask_spread_pct'):
+                extras.append(f"spread={opp['bid_ask_spread_pct']:.1f}%")
+            extras_str = " | " + " | ".join(extras) if extras else ""
+            warn_str = f" | WARN:{','.join(warnings)}" if warnings else ""
+            mid_lines.append(
+                f"{idx}. {opp['symbol']} ${opp['strike']:.0f}P | DTE={opp['dte']} | prem=${opp['premium']:.2f}"
+                f" | roi={opp['annualized_roi']:.1f}% | delta={opp['delta']:.2f} | iv={opp['iv']:.0f}%"
+                f" | rsi={opp['rsi']:.1f} | otm={opp['distance']:.1f}% | tier={opp.get('tier', 3)}"
+                f" | sr={opp.get('sr_risk_flag', '?')} | fast_score={opp.get('grok_trade_score', 0)}"
+                f"{extras_str}{warn_str}"
+            )
+        mid_content = "\n".join(mid_lines)
+        try:
+            from grok_utils import call_grok, MODEL_MID as _MODEL_MID
+            mid_response = call_grok(
+                [
+                    {"role": "system", "content": _BATCH_SYSTEM_PROMPT},
+                    {"role": "user", "content": mid_content},
+                ],
+                model=_MODEL_MID,
+                max_tokens=2000,
+                json_mode=True,
+            ) or ""
+            mid_json_opps = json.loads(mid_response).get("opportunities", [])
+            mid_by_idx = {item.get("idx", j + 1): item for j, item in enumerate(mid_json_opps)}
+            for j, opp in enumerate(mid_candidates):
+                item = mid_by_idx.get(j + 1, {})
+                if item:
+                    new_score = int(item.get("score", opp['grok_trade_score']))
+                    new_rec = str(item.get("recommendation", opp['grok_recommendation'])).strip()
+                    new_reason = str(item.get("reason", opp['grok_reason'])).strip()
+                    new_badge = "⚠️"
+                    if new_score >= 90: new_badge = "🔥"
+                    elif new_score >= 80: new_badge = "🚀"
+                    elif new_score >= 70: new_badge = "✅"
+                    elif new_score >= 60: new_badge = "⚡"
+                    opp.update({
+                        'grok_trade_score': new_score,
+                        'grok_profit_prob': f"{new_score}%",
+                        'grok_one_liner': f"{new_rec} — {new_reason}",
+                        'score_badge': new_badge,
+                        'grok_recommendation': new_rec,
+                        'grok_reason': new_reason,
+                        'mid_scored': True,
+                    })
+            print(f"MODEL_MID re-score complete for {len(mid_candidates)} candidates.")
+        except Exception as e:
+            logging.warning(f"[MID re-score] Failed: {e}")
 
     # Final sort by Grok score
     top_opps.sort(key=lambda x: x.get('grok_trade_score', 0), reverse=True)

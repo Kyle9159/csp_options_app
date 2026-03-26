@@ -180,12 +180,7 @@ def get_schwab_csp_positions() -> list[dict]:
 
 
 def get_open_positions_as_df():
-    """
-    Return open CSP positions as a (DataFrame, None) tuple to match the
-    historical load_trades_from_sheet() API shape.
-
-    Returns (None, None) when no positions are found or on error.
-    """
+    """Return open CSP positions as a (DataFrame, None) tuple."""
     try:
         import pandas as pd
     except ImportError:

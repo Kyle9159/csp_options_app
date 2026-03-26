@@ -25,9 +25,6 @@ python-dotenv>=1.0.0
 # Telegram Notifications
 python-telegram-bot>=20.0
 
-# Google Sheets Integration
-gspread>=5.10.0
-
 # Date/Time
 pytz>=2023.3
 

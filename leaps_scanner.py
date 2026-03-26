@@ -15,9 +15,8 @@ import dotenv
 from schwab.client import Client
 from schwab import auth
 import yfinance as yf
-from telegram import Bot as telegram_bot
-
 from grok_utils import call_grok, get_grok_sentiment_cached, MODEL_FAST, MODEL_MID
+from telegram_utils import send_alert as _tg_send
 from helper_functions import save_cached_leaps
 from schwab_utils import get_client
 
@@ -36,17 +35,10 @@ c = get_client()
 c.set_enforce_enums(False)
 
 ET_TZ = pytz.timezone('US/Eastern')
-TELEGRAM_TOKEN = os.getenv('SIMPLE_OPTIONS_SCANNER_TELEGRAM_TOKEN')
-CHAT_ID = 7972059629
-bot = telegram_bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
 
 async def send_alert(msg):
-    if bot:
-        try:
-            await bot.send_message(chat_id=CHAT_ID, text=msg, disable_web_page_preview=True)
-        except:
-            pass
     print(msg)
+    await _tg_send("leaps", msg)
 
 # ==================== MAIN LEAPS SCANNER ====================
 async def main(force_refresh=False):

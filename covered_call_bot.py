@@ -9,8 +9,8 @@ from datetime import datetime
 import pytz
 from schwab.client import Client
 from schwab import auth
-from telegram import Bot as telegram_bot
 import yfinance as yf
+from telegram_utils import send_alert as _tg_send
 import requests
 import dotenv
 from pathlib import Path
@@ -31,10 +31,6 @@ ACCOUNT_ID = PAPER_ACCOUNT_ID if PAPER_TRADING else LIVE_ACCOUNT_ID
 TOKEN_PATH = 'schwab_token.json'
 ASSIGNMENT_FILE = 'assigned_history.json'  # Shared with wheel_bot
 
-TELEGRAM_TOKEN = os.getenv('COVERED_CALL_TELEGRAM_TOKEN')
-CHAT_ID = 7972059629
-bot = telegram_bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
-
 ET_TZ = pytz.timezone('US/Eastern')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(message)s')
 
@@ -53,18 +49,20 @@ def _get_schwab_client():
     return c
     
 async def send_alert(message):
-    if not bot:
-        print("Telegram disabled")
-        return
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text=message, disable_web_page_preview=True)
-        print("CC Alert sent.")
-    except Exception as e:
-        print(f"Telegram error: {e}")
+    await _tg_send("cc_bot", message)
 
 def get_current_positions():
     try:
-        acct = get_client().get_account(ACCOUNT_ID, fields=Client.Account.Fields.POSITIONS)
+        client = get_client()
+        acct_numbers = client.get_account_numbers().json()
+        account_hash = next(
+            (a['hashValue'] for a in acct_numbers if a['accountNumber'] == ACCOUNT_ID),
+            None
+        )
+        if not account_hash:
+            logging.warning(f"No hash found for account {ACCOUNT_ID}")
+            return {}
+        acct = client.get_account(account_hash, fields=Client.Account.Fields.POSITIONS)
         positions = acct.json()['securitiesAccount']['positions']
         pos_dict = {}
         for p in positions:
@@ -95,44 +93,25 @@ async def find_covered_calls(symbol, position_data):
         if price == 0:
             return None
 
-        # Get Grok sentiment to adjust DTE range
+        # 5-regime CC settings (OTM calls — lower delta = safer from assignment)
+        _CC_REGIME = {
+            "STRONG_BULL":      {"delta_min": 0.10, "delta_max": 0.30, "dte_min": 21, "dte_max": 35},
+            "MILD_BULL":        {"delta_min": 0.08, "delta_max": 0.25, "dte_min": 25, "dte_max": 40},
+            "NEUTRAL_OR_WEAK":  {"delta_min": 0.05, "delta_max": 0.20, "dte_min": 30, "dte_max": 45},
+            "CAUTIOUS":         {"delta_min": 0.05, "delta_max": 0.15, "dte_min": 35, "dte_max": 50},
+            "BEARISH_HIGH_VOL": {"delta_min": 0.03, "delta_max": 0.10, "dte_min": 45, "dte_max": 60},
+        }
         grok_sentiment, _ = get_grok_sentiment_cached()
-        is_bullish = "BULL" in grok_sentiment or "STRONG" in grok_sentiment
-
-        if is_bullish:
-            # Bullish: Slightly more aggressive but still safe
-            delta_max = 0.25   # Was 0.60 → now very conservative
-            delta_min = 0.08
-            dte_min = 21
-            dte_max = 45
-        else:
-            # Neutral / Bearish: Ultra conservative
-            delta_max = 0.20   # Even lower delta = deeper OTM
-            delta_min = 0.05
-            dte_min = 30
-            dte_max = 60
-
-        # Add minimum premium filtegrok_sentiment, _ = get_grok_sentiment_cached()
-        is_bullish = "BULL" in grok_sentiment or "STRONG" in grok_sentiment
-
-        # === CONSERVATIVE COVERED CALL MODE ===
-        # Goal: Very low chance of assignment (>80–95% keep probability)
-        # Focus on deep-ish OTM calls with decent premium
-
-        if is_bullish:
-            delta_min = 0.08      # Allow slightly higher premium
-            delta_max = 0.25      # Max ~75% keep probability — still safe
-            dte_min = 21
-            dte_max = 45
-        else:
-            delta_min = 0.05      # Ultra conservative in neutral/bear
-            delta_max = 0.20      # ~80–95% keep probability
-            dte_min = 30
-            dte_max = 60
+        regime_key = grok_sentiment if grok_sentiment in _CC_REGIME else "MILD_BULL"
+        cc_settings = _CC_REGIME[regime_key]
+        delta_min = cc_settings["delta_min"]
+        delta_max = cc_settings["delta_max"]
+        dte_min   = cc_settings["dte_min"]
+        dte_max   = cc_settings["dte_max"]
 
         # Minimum quality filters
         min_bid = 0.30            # Don't sell tiny premiums
-        min_oi = 100              # Better liquidity/fills
+        min_oi = 100              # Adequate liquidity
 
         candidates = []
         for exp, strikes in chain['callExpDateMap'].items():
@@ -236,21 +215,25 @@ async def main():
         )
         await send_alert(header)
 
-        for sym, qty in positions.items():
-            calls = await find_covered_calls(sym, int(qty))
+        for sym, pos_data in positions.items():
+            calls = await find_covered_calls(sym, pos_data)
             if calls:
+                shares = pos_data['quantity']
+                avg_price = pos_data.get('averagePrice', 0)
                 price = yf.Ticker(sym).info.get('regularMarketPrice', 0)
                 msg = (
-                    f"📊 {sym} — {qty} shares @ ~${price:.2f}\n"
+                    f"📊 {sym} — {shares} shares @ ~${price:.2f}\n"
                     f"Top calls to sell (limit near bid):\n"
                 )
                 for i, c in enumerate(calls, 1):
+                    if_called = ((c['strike'] - c['avg_price']) / c['avg_price'] * 100) if c['avg_price'] else 0
+                    monthly = c['annualized'] / 12
                     msg += (
-                        f"#{i} ${c['strike']:.2f}C ({c['dte']} DTE)\n"
-                        f"  Bid: ${c['bid']:.2f} → ${c['premium_income']:,.0f} income\n"
-                        f"  Monthly: {c['monthly_yield']:.1f}% | Annualized: {c['annualized']:.1f}%\n"
-                        f"  ~{c['prob_profit']:.0f}% chance keep shares\n"
-                        f"  If called: +{c['if_called_return']:.1f}% return\n"
+                        f"#{i} ${c['strike']:.2f}C ({c['dte']} DTE) {c.get('distance_badge', '')}\n"
+                        f"  Bid: ${c['bid']:.2f} → ${c['total_income']:,.0f} income\n"
+                        f"  Monthly: {monthly:.1f}% | Annualized: {c['annualized']:.1f}%\n"
+                        f"  ~{c['prob_keep']:.0f}% chance keep shares\n"
+                        f"  If called: +{if_called:.1f}% return\n"
                         f"  Delta: {c['delta']:.2f}\n\n"
                     )
                 msg += "Tip: Use limit orders 5–10¢ above bid for better fills!"

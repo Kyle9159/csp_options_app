@@ -300,66 +300,6 @@ def get_grok_opportunity_analysis(symbol, price, strike, dte, premium, delta, iv
     _write_cache(cache_file, {"prob": prob, "oneliner": oneliner})
     return prob, oneliner
 
-def parse_grok_batch_response(response, batch_size):
-    """
-    Parse a batch response from Grok API into individual analysis blocks.
-
-    Args:
-        response: Raw response string from Grok
-        batch_size: Number of opportunities in the batch
-
-    Returns:
-        list: List of analysis blocks, one per opportunity
-    """
-    if not response or not isinstance(response, str):
-        return []
-
-    try:
-        blocks = []
-
-        # First, try to split by "--- OPPORTUNITY N ---" markers (our prompt format)
-        opp_pattern = r'---\s*OPPORTUNITY\s*\d+\s*---'
-        if re.search(opp_pattern, response, re.IGNORECASE):
-            # Split by OPPORTUNITY markers
-            parts = re.split(opp_pattern, response, flags=re.IGNORECASE)
-            # Filter out empty parts and strip whitespace
-            blocks = [part.strip() for part in parts if part.strip()]
-
-        # If that didn't work, try "--- END ---" markers
-        elif "--- END ---" in response or "---END---" in response:
-            # Split by END markers
-            parts = re.split(r'---\s*END\s*---', response, flags=re.IGNORECASE)
-            blocks = [part.strip() for part in parts if part.strip()]
-
-        # Try splitting by numbered items (1., 2., etc.) with SCORE/RECOMMENDATION
-        elif re.search(r'(?:^|\n)\s*\d+[\.\)]\s*(?:SCORE|RECOMMENDATION)', response, re.IGNORECASE | re.MULTILINE):
-            parts = re.split(r'(?:^|\n)\s*\d+[\.\)]\s*', response, flags=re.MULTILINE)
-            blocks = [part.strip() for part in parts if part.strip()]
-
-        # Try splitting by "SCORE:" markers (each opportunity starts with SCORE:)
-        elif response.upper().count("SCORE:") >= batch_size:
-            parts = re.split(r'(?=SCORE:)', response, flags=re.IGNORECASE)
-            blocks = [part.strip() for part in parts if part.strip()]
-
-        # Fallback: split by double newlines or paragraph breaks
-        else:
-            parts = re.split(r'\n\s*\n', response)
-            blocks = [part.strip() for part in parts if part.strip()]
-
-        # Ensure we have the right number of blocks
-        if len(blocks) < batch_size:
-            # Pad with empty blocks if needed
-            blocks.extend(["Analysis unavailable"] * (batch_size - len(blocks)))
-        elif len(blocks) > batch_size:
-            # Truncate if too many
-            blocks = blocks[:batch_size]
-
-        return blocks
-
-    except Exception as e:
-        print(f"Error parsing batch response: {e}")
-        return ["Analysis failed"] * batch_size
-
 
 def get_grok_0dte_recommendation(symbol, underlying_price, short_put, short_call, put_credit, call_credit, use_reasoning=False):
     """

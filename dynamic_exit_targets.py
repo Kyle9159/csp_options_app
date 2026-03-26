@@ -61,10 +61,11 @@ def calculate_exit_targets(
         premium = safe_float(kwargs.get('premium_collected', entry_price))
         support = safe_float(kwargs.get('support', 0))
         resistance = safe_float(kwargs.get('resistance', 0))
+        regime_key = str(kwargs.get('regime_key', 'MILD_BULL'))
 
         if position_type.lower() in ["short_put", "csp", "cash_secured_put"]:
             return _calculate_short_put_targets(
-                current_price, strike, premium, theta, delta, dte, iv, support
+                current_price, strike, premium, theta, delta, dte, iv, support, regime_key
             )
         elif position_type.lower() in ["covered_call", "cc"]:
             return _calculate_covered_call_targets(
@@ -88,7 +89,8 @@ def _calculate_short_put_targets(
     delta: float,
     dte: int,
     iv: float,
-    support: float = 0
+    support: float = 0,
+    regime_key: str = 'MILD_BULL'
 ) -> Dict[str, any]:
     """Calculate exit targets for cash-secured puts"""
 
@@ -98,15 +100,26 @@ def _calculate_short_put_targets(
     # Early exit: 25% profit if DTE < 21
     early_exit_premium = premium * 0.75  # Close when premium decays to 75% of original (25% profit)
 
+    # Regime-linked stop-loss buffer above strike
+    # In high-vol/bearish regimes, give a wider buffer to avoid premature whipsaw stops
+    _REGIME_SL_BUFFER = {
+        'BEARISH_HIGH_VOL': 0.04,   # 4% above strike — widest buffer
+        'CAUTIOUS':         0.03,   # 3% above strike
+        'NEUTRAL_OR_WEAK':  0.025,  # 2.5% above strike
+        'MILD_BULL':        0.02,   # 2% above strike (original default)
+        'STRONG_BULL':      0.015,  # 1.5% above strike — tightest, market stable
+    }
+    sl_buffer = _REGIME_SL_BUFFER.get(regime_key, 0.02)
+
     # Stop loss: if delta > 0.50 or price approaches strike
     if strike > 0:
-        stop_loss_price = strike * 1.02  # 2% buffer above strike
+        stop_loss_price = strike * (1 + sl_buffer)  # regime-scaled buffer above strike
         emergency_exit_price = strike * 0.98  # Emergency if price goes below strike
 
         # Adjust based on support
         if support > 0 and support < strike:
             # Support exists below strike - can be more aggressive
-            stop_loss_price = strike * 1.01  # Tighter stop
+            stop_loss_price = strike * (1 + sl_buffer * 0.5)  # Tighter stop when support below
     else:
         # Fallback if no strike provided
         stop_loss_price = current_price * 0.95
