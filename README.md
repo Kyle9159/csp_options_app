@@ -353,6 +353,57 @@ python zero_dte_spread_scanner.py
 
 ---
 
+## Schwab Re-Authorization
+
+Schwab OAuth tokens expire after **7 days**. When your token is expired or expiring soon, a yellow/red banner appears at the top of the dashboard.
+
+### Re-authorizing from the Dashboard
+
+1. Click the **Re-Authorize Schwab** button in the banner (or navigate to `https://127.0.0.1:5000/auth/start`)
+2. A Schwab login page opens in your browser
+3. Log in and click **Allow**
+4. You'll be redirected to a URL starting with `https://127.0.0.1:8182/?code=...` — this page will look like an error, which is **expected**
+5. Copy the **entire URL** from your browser's address bar
+6. Paste it into the terminal where `dashboard_server.py` is running and press Enter
+7. The banner will disappear and the dashboard will resume live data
+
+### Schwab Developer Portal Setup (one-time)
+
+These settings must be configured in the [Schwab Developer Portal](https://developer.schwab.com) for OAuth to work:
+
+| Setting | Value |
+|---------|-------|
+| **App type** | Personal Use |
+| **Callback URL** | `https://127.0.0.1:8182` |
+| **Products** | MarketData API + Accounts and Trading Production |
+
+The `REDIRECT_URI` in your `.env` **must exactly match** the callback URL registered in the portal (including the `https://` and no trailing slash).
+
+### Token File Location
+
+The token is saved to `cache_files/schwab_token.json` by default. You can override this with:
+
+```env
+TOKEN_PATH=cache_files/schwab_token.json
+```
+
+To force a fresh login, delete the token file:
+```bash
+rm cache_files/schwab_token.json
+```
+
+### Token Status API
+
+`GET /api/auth/status` returns current token health:
+
+```json
+{ "status": "ok", "needs_reauth": false, "days_since_auth": 2.1, "message": "Schwab token is valid." }
+```
+
+Possible `status` values: `ok` · `expiring_soon` (≥5 days) · `expired` (≥7 days) · `missing` · `auth_in_progress` · `auth_error`
+
+---
+
 ## Project Structure
 
 ```
