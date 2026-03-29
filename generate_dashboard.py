@@ -3963,11 +3963,14 @@ def generate_html():
 
                     <!-- Sub-tabs for Analytics -->
                     <div class="sub-tabs" style="display:flex; gap:12px; margin-bottom:32px; flex-wrap:wrap;">
-                        <button class="sub-tab active" onclick="showAnalyticsSubTab('performance')">
+                        <button class="sub-tab active" onclick="showAnalyticsSubTab('performance', this)">
                             📊 Performance
                         </button>
-                        <button class="sub-tab" onclick="showAnalyticsSubTab('greeks')">
+                        <button class="sub-tab" onclick="showAnalyticsSubTab('greeks', this)">
                             📉 Portfolio Greeks
+                        </button>
+                        <button class="sub-tab" onclick="showAnalyticsSubTab('backtest', this)">
+                            🧪 Back Testing Analysis
                         </button>
                     </div>
 
@@ -4204,8 +4207,44 @@ def generate_html():
                         {% endif %}
                     </div>
 
+                    <!-- Back Testing Analysis Sub-tab -->
+                    <div id="analytics-backtest" class="analytics-subtab" style="display:none;">
+                        <div style="background:linear-gradient(135deg, #1e293b, #0f172a); padding:24px; border-radius:20px; border:2px solid #334155; margin-bottom:20px;">
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
+                                <div>
+                                    <h3 style="color:#e2e8f0; margin:0 0 8px 0;">🧪 Recommendation Back Testing Analysis</h3>
+                                    <p style="color:#94a3b8; margin:0; max-width:820px; line-height:1.6;">
+                                        Review the tracked top-10 daily scanner recommendations, their 21-day profit paths, days to hit 40% / 50% / 60% / 70% profit,
+                                        and breakdowns by symbol, sector, regime, IV rank, and Greeks.
+                                    </p>
+                                </div>
+                                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                                    <button onclick="reloadBacktestAnalytics()" style="padding:10px 16px; background:linear-gradient(135deg, #3b82f6, #2563eb); color:#ffffff; border:1px solid #3b82f6; border-radius:10px; cursor:pointer; font-weight:600;">
+                                        ↻ Refresh Backtest
+                                    </button>
+                                    <a href="/analysis" target="_blank" rel="noopener noreferrer" style="padding:10px 16px; background:#1e293b; color:#e2e8f0; border:1px solid #475569; border-radius:10px; text-decoration:none; font-weight:600; display:inline-flex; align-items:center;">
+                                        ↗ Open Full Page
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="background:linear-gradient(135deg, #1e293b, #0f172a); border:2px solid #334155; border-radius:20px; overflow:hidden; min-height:1200px;">
+                            <iframe
+                                id="analytics-backtest-frame"
+                                src="/analysis?embed=1"
+                                title="Back Testing Analysis"
+                                loading="lazy"
+                                onload="syncBacktestFrameHeight()"
+                                style="display:block; width:100%; min-height:1400px; border:0; background:transparent;"
+                            ></iframe>
+                        </div>
+                    </div>
+
                     <script>
-                    function showAnalyticsSubTab(subtab) {
+                    let analyticsBacktestLoaded = false;
+
+                    function showAnalyticsSubTab(subtab, buttonEl) {
                         // Hide all sub-tabs
                         document.querySelectorAll('.analytics-subtab').forEach(el => el.style.display = 'none');
                         // Remove active class from all sub-tab buttons
@@ -4214,7 +4253,9 @@ def generate_html():
                         // Show selected sub-tab
                         document.getElementById('analytics-' + subtab).style.display = 'block';
                         // Add active class to clicked button
-                        event.target.classList.add('active');
+                        if (buttonEl) {
+                            buttonEl.classList.add('active');
+                        }
 
                         // Load live analytics data when performance tab is shown
                         if (subtab === 'performance') {
@@ -4225,6 +4266,43 @@ def generate_html():
                         if (subtab === 'greeks' && typeof initAnalyticsGreeks === 'function') {
                             initAnalyticsGreeks();
                         }
+
+                        if (subtab === 'backtest') {
+                            initBacktestAnalyticsFrame();
+                        }
+                    }
+
+                    function syncBacktestFrameHeight() {
+                        const frame = document.getElementById('analytics-backtest-frame');
+                        if (!frame) return;
+
+                        try {
+                            const frameDoc = frame.contentWindow.document;
+                            const nextHeight = Math.max(
+                                frameDoc.body ? frameDoc.body.scrollHeight : 0,
+                                frameDoc.documentElement ? frameDoc.documentElement.scrollHeight : 0,
+                                1400
+                            );
+                            frame.style.height = `${nextHeight + 24}px`;
+                        } catch (error) {
+                            console.warn('Unable to resize backtest iframe', error);
+                        }
+                    }
+
+                    function initBacktestAnalyticsFrame(forceReload = false) {
+                        const frame = document.getElementById('analytics-backtest-frame');
+                        if (!frame) return;
+
+                        if (!analyticsBacktestLoaded || forceReload) {
+                            frame.src = `/analysis?embed=1${forceReload ? `&ts=${Date.now()}` : ''}`;
+                            analyticsBacktestLoaded = true;
+                        } else {
+                            setTimeout(syncBacktestFrameHeight, 250);
+                        }
+                    }
+
+                    function reloadBacktestAnalytics() {
+                        initBacktestAnalyticsFrame(true);
                     }
 
                     // ── Analytics dynamic data loader ──────────────────────────

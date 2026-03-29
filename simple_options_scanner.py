@@ -809,6 +809,11 @@ def find_high_probability_options(symbol, current_price, tier, regime, grok_sent
                     if iv < regime["iv_min"]:
                             continue
 
+                    # Full Greeks — all available in Schwab chain response
+                    gamma = float(opt.get('gamma', 0) or 0)
+                    theta = float(opt.get('theta', 0) or 0)
+                    vega  = float(opt.get('vega',  0) or 0)
+
                     income = premium * 100
                     roi = (income / capital_needed) * 100
                     annualized = (roi / dte) * 365 if dte > 0 else 0
@@ -825,6 +830,9 @@ def find_high_probability_options(symbol, current_price, tier, regime, grok_sent
                         'dte': dte,
                         'annualized_roi': annualized,
                         'delta': delta,
+                        'gamma': gamma,
+                        'theta': theta,
+                        'vega': vega,
                         'capital': capital_needed,
                         'current_price': current_price,
                         'distance': ((current_price - strike) / current_price) * 100,
@@ -1623,11 +1631,30 @@ async def main():
 
     # Log recommendations to trade outcome tracker
     try:
+        import pytz as _pytz
+        _et = _pytz.timezone('US/Eastern')
+        _now_et = datetime.now(_et)
+        _scan_time = _now_et.strftime('%H:%M')
+        _day_of_week = _now_et.strftime('%A')
         from trade_outcome_tracker import log_recommendations
-        logged = log_recommendations(scanner_tiles, regime_key)
+        logged = log_recommendations(
+            scanner_tiles, regime_key,
+            scan_time=_scan_time, day_of_week=_day_of_week,
+        )
         print(f"📝 Logged {logged} recommendations to trade journal")
     except Exception as e:
         print(f"Trade journal logging failed: {e}")
+
+    # Top-N daily flagging + snapshot for accuracy tracking
+    try:
+        from rec_accuracy_tracker import DAILY_TOP_N, mark_daily_top_n, snapshot_top_ranked_recs
+        flagged = mark_daily_top_n()
+        print(f"🏆 Flagged {flagged} top-{DAILY_TOP_N} daily recommendations")
+        snap_result = snapshot_top_ranked_recs()
+        print(f"📸 Snapshots: {snap_result.get('snapped', 0)} taken, "
+              f"{snap_result.get('skipped_already_done', 0)} already done")
+    except Exception as e:
+        print(f"Rec accuracy tracking failed: {e}")
     
     
 def export_to_csv(opportunities, scan_time):

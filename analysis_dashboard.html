@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rec Accuracy Tracker — CSP Analysis</title>
+  <style>
+    /* ── Base ─────────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    body.embed {
+      background: transparent;
+      min-height: auto;
+      padding: 18px;
+    }
+    body.embed .page-header,
+    body.embed .nav-row {
+      display: none;
+    }
+    body.embed .container {
+      max-width: none;
+    }
+    body.embed .section-title:first-of-type {
+      margin-top: 0;
+    }
+    .container { max-width: 1600px; margin: auto; }
+
+    /* ── Header ───────────────────────────────────────────────────────────── */
+    .page-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .page-header h1 {
+      font-size: 2.2rem;
+      color: #60a5fa;
+      text-shadow: 0 0 20px rgba(96,165,250,0.4);
+      margin-bottom: 6px;
+    }
+    .page-header .subtitle { color: #94a3b8; font-size: 1rem; }
+    .last-updated { color: #64748b; font-size: 0.85rem; margin-top: 4px; }
+
+    .nav-row {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+    }
+    .nav-btn {
+      padding: 10px 22px;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+      background: linear-gradient(135deg, #1e293b, #0f172a);
+      color: #e2e8f0;
+      transition: all 0.25s;
+    }
+    .nav-btn:hover { border-color: #60a5fa; color: #60a5fa; transform: translateY(-2px); }
+    .nav-btn.primary {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      border-color: #3b82f6;
+    }
+    .nav-btn.primary:hover { box-shadow: 0 4px 20px rgba(59,130,246,0.4); }
+    .nav-btn.danger {
+      background: linear-gradient(135deg, #f59e0b, #ea580c);
+      border-color: #f59e0b;
+    }
+
+    /* ── Glass card ───────────────────────────────────────────────────────── */
+    .card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 20px 24px;
+      backdrop-filter: blur(8px);
+    }
+    .card h2 {
+      font-size: 1.1rem;
+      color: #60a5fa;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section-title {
+      font-size: 1.25rem;
+      color: #60a5fa;
+      margin: 32px 0 14px;
+      border-left: 3px solid #3b82f6;
+      padding-left: 12px;
+    }
+
+    /* ── Summary cards ────────────────────────────────────────────────────── */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .stat-card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 18px 20px;
+      backdrop-filter: blur(6px);
+      transition: transform 0.2s;
+    }
+    .stat-card:hover { transform: translateY(-3px); }
+    .stat-label {
+      font-size: 0.78rem;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px;
+    }
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #f1f5f9;
+      line-height: 1;
+    }
+    .stat-sub { font-size: 0.78rem; color: #94a3b8; margin-top: 4px; }
+    .stat-card.green .stat-value { color: #34d399; }
+    .stat-card.blue  .stat-value { color: #60a5fa; }
+    .stat-card.amber .stat-value { color: #fbbf24; }
+    .stat-card.rose  .stat-value { color: #fb7185; }
+    .stat-card.purple .stat-value { color: #a78bfa; }
+
+    /* ── Profit targets row ───────────────────────────────────────────────── */
+    .targets-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+    @media (max-width: 700px) { .targets-grid { grid-template-columns: repeat(2, 1fr); } }
+    .target-card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px 18px;
+      text-align: center;
+    }
+    .target-pct { font-size: 1.5rem; font-weight: 700; color: #fbbf24; }
+    .target-label { font-size: 0.78rem; color: #64748b; margin: 4px 0 10px; }
+    .target-stat { font-size: 0.88rem; color: #94a3b8; }
+    .target-stat strong { color: #f1f5f9; }
+
+    /* ── Tables ───────────────────────────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.865rem;
+    }
+    th {
+      background: rgba(255,255,255,0.06);
+      color: #94a3b8;
+      font-weight: 600;
+      padding: 10px 12px;
+      text-align: left;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+    th:hover { color: #60a5fa; }
+    td {
+      padding: 10px 12px;
+      border-top: 1px solid #1e293b;
+      white-space: nowrap;
+    }
+    tr:hover td { background: rgba(255,255,255,0.03); }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 9px;
+      border-radius: 20px;
+      font-size: 0.76rem;
+      font-weight: 700;
+    }
+    .badge.win  { background: rgba(52,211,153,0.15); color: #34d399; }
+    .badge.loss { background: rgba(251,113,133,0.15); color: #fb7185; }
+    .badge.tracking { background: rgba(251,191,36,0.15); color: #fbbf24; }
+    .win-rate { font-weight: 700; }
+    .win-rate.high { color: #34d399; }
+    .win-rate.mid  { color: #fbbf24; }
+    .win-rate.low  { color: #fb7185; }
+
+    /* ── Progress bar ─────────────────────────────────────────────────────── */
+    .progress-bar {
+      height: 6px;
+      background: #1e293b;
+      border-radius: 3px;
+      overflow: hidden;
+      min-width: 80px;
+    }
+    .progress-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: linear-gradient(90deg, #3b82f6, #60a5fa);
+      transition: width 0.5s ease;
+    }
+    .progress-fill.green { background: linear-gradient(90deg, #059669, #34d399); }
+    .progress-fill.amber { background: linear-gradient(90deg, #d97706, #fbbf24); }
+    .progress-fill.red   { background: linear-gradient(90deg, #dc2626, #fb7185); }
+
+    /* ── Two-column layout ────────────────────────────────────────────────── */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+
+    /* ── Toast / loading ───────────────────────────────────────────────────── */
+    .toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 12px 20px;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #f1f5f9;
+      z-index: 999;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    .toast.success { border-color: #34d399; color: #34d399; }
+    .toast.error   { border-color: #fb7185; color: #fb7185; }
+
+    .loading {
+      text-align: center;
+      color: #64748b;
+      padding: 24px;
+      font-style: italic;
+    }
+    .empty { text-align: center; color: #64748b; padding: 32px; font-style: italic; }
+
+    /* ── Pagination ────────────────────────────────────────────────────────── */
+    .pagination {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      margin-top: 16px;
+    }
+    .page-btn {
+      padding: 7px 14px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #94a3b8;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .page-btn:hover, .page-btn.active { border-color: #60a5fa; color: #60a5fa; }
+
+    /* ── Snapshot detail panel ─────────────────────────────────────────────── */
+    .sparkline-cell { min-width: 90px; }
+    .sparkline {
+      display: inline-flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 28px;
+    }
+    .spark-bar {
+      width: 6px;
+      border-radius: 2px 2px 0 0;
+      background: #3b82f6;
+      transition: height 0.3s;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <div class="page-header">
+    <h1>📊 Recommendation Accuracy Tracker</h1>
+    <p class="subtitle">Top-10 daily CSP recommendations tracked over 21-day windows</p>
+    <p class="last-updated" id="lastUpdated">Loading…</p>
+  </div>
+
+  <div class="nav-row">
+    <a href="/" class="nav-btn">← Main Dashboard</a>
+    <button class="nav-btn primary" onclick="loadAll()">↻ Refresh Data</button>
+    <button class="nav-btn danger" onclick="triggerSnapshot()">📸 Snapshot Now</button>
+  </div>
+
+  <!-- ── Summary cards ──────────────────────────────────────────────────── -->
+  <div class="summary-grid" id="summaryGrid">
+    <div class="loading">Loading summary…</div>
+  </div>
+
+  <!-- ── Profit Targets ─────────────────────────────────────────────────── -->
+  <p class="section-title">🎯 Profit Target Analysis</p>
+  <div class="targets-grid" id="targetsGrid">
+    <div class="loading">Loading…</div>
+  </div>
+
+  <!-- ── Score Calibration + Greeks in two columns ──────────────────────── -->
+  <p class="section-title">🔬 Score Calibration & Greek Entry Analysis</p>
+  <div class="two-col">
+    <div class="card">
+      <h2>📈 Score Calibration (Rank &amp; Grok Score vs Win Rate)</h2>
+      <div class="table-wrap" id="scoreCalTable"><div class="loading">Loading…</div></div>
+    </div>
+    <div class="card">
+      <h2>Δ Greek Entry Analysis (Delta Bucket)</h2>
+      <div class="table-wrap" id="greeksTable"><div class="loading">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- ── IV Rank + Day of Week ──────────────────────────────────────────── -->
+  <p class="section-title">📉 IV &amp; Timing Insights</p>
+  <div class="two-col">
+    <div class="card">
+      <h2>📊 IV Rank at Entry vs Outcome</h2>
+      <div class="table-wrap" id="ivRankTable"><div class="loading">Loading…</div></div>
+    </div>
+    <div class="card">
+      <h2>📅 Day of Week vs Win Rate</h2>
+      <div class="table-wrap" id="dowTable"><div class="loading">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- ── Regime + Sector ────────────────────────────────────────────────── -->
+  <p class="section-title">🌍 Regime &amp; Sector Breakdown</p>
+  <div class="two-col">
+    <div class="card">
+      <h2>🏛 By Market Regime</h2>
+      <div class="table-wrap" id="regimeTable"><div class="loading">Loading…</div></div>
+    </div>
+    <div class="card">
+      <h2>🏢 By Sector</h2>
+      <div class="table-wrap" id="sectorTable"><div class="loading">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- ── By Symbol ──────────────────────────────────────────────────────── -->
+  <p class="section-title">🔤 By Symbol</p>
+  <div class="card">
+    <h2>📋 Symbol Performance</h2>
+    <div class="table-wrap" id="symbolTable"><div class="loading">Loading…</div></div>
+  </div>
+
+  <!-- ── Recommendation Detail ──────────────────────────────────────────── -->
+  <p class="section-title">📄 Recommendation Detail</p>
+  <div class="card">
+    <h2>🗂 All Top-10 Daily Recommendations with Outcomes</h2>
+    <div style="margin-bottom:12px; display:flex; gap:10px; flex-wrap:wrap;">
+      <input id="recSearch" oninput="filterRecTable()" placeholder="Filter by symbol…" style="padding:7px 12px; border-radius:8px; border:1px solid #334155; background:#1e293b; color:#e2e8f0; font-size:0.88rem; width:200px;" />
+      <select id="recFilter" onchange="filterRecTable()" style="padding:7px 12px; border-radius:8px; border:1px solid #334155; background:#1e293b; color:#e2e8f0; font-size:0.88rem;">
+        <option value="">All Status</option>
+        <option value="win">Would Have Won ✅</option>
+        <option value="loss">Would Have Lost ❌</option>
+        <option value="tracking">Still Tracking ⏳</option>
+      </select>
+    </div>
+    <div class="table-wrap" id="recsTable"><div class="loading">Loading…</div></div>
+    <div class="pagination" id="recPagination"></div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let allRecs = [];
+let filteredRecs = [];
+let recPage = 0;
+const PAGE_SIZE = 30;
+const isEmbeddedView = new URLSearchParams(window.location.search).get('embed') === '1';
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  if (isEmbeddedView) {
+    document.body.classList.add('embed');
+    document.title = 'Back Testing Analysis';
+  }
+  loadAll();
+});
+
+async function loadAll() {
+  document.getElementById('lastUpdated').textContent = 'Refreshing…';
+  await Promise.all([
+    loadSummary(),
+    loadScoreCalibration(),
+    loadGreeks(),
+    loadIvRank(),
+    loadDow(),
+    loadRegime(),
+    loadSector(),
+    loadSymbol(),
+    loadRecs(),
+  ]);
+  document.getElementById('lastUpdated').textContent =
+    'Last updated: ' + new Date().toLocaleTimeString();
+}
+
+// ── API helpers ────────────────────────────────────────────────────────────
+async function apiFetch(url) {
+  const r = await fetch(url);
+  const json = await r.json();
+  if (!json.ok) throw new Error(json.error || 'API error');
+  return json.data;
+}
+
+function showToast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + type;
+  setTimeout(() => { el.className = 'toast'; }, 3200);
+}
+
+// ── Snapshot trigger ───────────────────────────────────────────────────────
+async function triggerSnapshot() {
+  try {
+    showToast('Snapshot job started…', 'success');
+    const r = await fetch('/api/analysis/snapshot_now', { method: 'POST' });
+    const json = await r.json();
+    if (json.ok) {
+      showToast('Snapshot job queued ✓', 'success');
+      setTimeout(loadAll, 8000);
+    } else {
+      showToast('Snapshot failed: ' + json.error, 'error');
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+  }
+}
+
+// ── Summary cards ──────────────────────────────────────────────────────────
+async function loadSummary() {
+  try {
+    const d = await apiFetch('/api/analysis/summary');
+    const winColor = d.win_rate_pct >= 70 ? 'green' : d.win_rate_pct >= 50 ? 'amber' : 'rose';
+    const cards = [
+      { label: 'Recs Tracked', value: d.total_recs_tracked, cls: 'blue', sub: `${d.tracking_complete_count} complete · ${d.still_tracking_count} open` },
+      { label: 'Win Rate (50% target)', value: fmt(d.win_rate_pct) + '%', cls: winColor, sub: 'Hit 50% profit within 21d' },
+      { label: 'Avg Days → 50%', value: d.avg_days_to_50pct ?? '—', cls: 'amber', sub: 'days to close half premium' },
+      { label: 'Avg Peak Profit', value: fmt(d.avg_max_profit_pct) + '%', cls: 'purple', sub: 'best point in tracking window' },
+      { label: 'Avg Premium/Rec', value: '$' + fmt(d.avg_premium_dollars), cls: 'blue', sub: 'per contract (100 shares)' },
+      { label: 'Total Premium Tracked', value: '$' + fmtK(d.total_premium_tracked), cls: 'green', sub: 'aggregate premium across all recs' },
+    ];
+    document.getElementById('summaryGrid').innerHTML = cards.map(c => `
+      <div class="stat-card ${c.cls}">
+        <div class="stat-label">${c.label}</div>
+        <div class="stat-value">${c.value}</div>
+        <div class="stat-sub">${c.sub}</div>
+      </div>`).join('');
+
+    // Profit targets grid
+    const tg = document.getElementById('targetsGrid');
+    const targets = d.profit_targets || {};
+    tg.innerHTML = [40, 50, 60, 70].map(t => {
+      const info = targets[t] || {};
+      return `
+        <div class="target-card">
+          <div class="target-pct">${info.hit_rate_pct ?? 0}%</div>
+          <div class="target-label">${t}% profit hit rate</div>
+          <div class="target-stat">Avg: <strong>${info.avg_days ?? '—'}</strong> days</div>
+          <div class="target-stat">Median: <strong>${info.median_days ?? '—'}</strong> days</div>
+          <div class="target-stat" style="margin-top:4px;">${info.hits ?? 0} / ${info.total ?? 0} recs</div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('summaryGrid').innerHTML = err(e);
+  }
+}
+
+// ── Score calibration ──────────────────────────────────────────────────────
+async function loadScoreCalibration() {
+  try {
+    const rows = await apiFetch('/api/analysis/score_calibration');
+    if (!rows.length) { document.getElementById('scoreCalTable').innerHTML = empty(); return; }
+    document.getElementById('scoreCalTable').innerHTML = `
+      <table>
+        <thead><tr>
+          <th onclick="sortTable(this,0)">Rank</th>
+          <th onclick="sortTable(this,1)">Score Bucket</th>
+          <th onclick="sortTable(this,2)">Recs</th>
+          <th onclick="sortTable(this,3)">Win %</th>
+          <th onclick="sortTable(this,4)">Avg Days→50%</th>
+          <th onclick="sortTable(this,5)">Avg Peak</th>
+          <th onclick="sortTable(this,6)">Avg Premium</th>
+        </tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td>#${r.overall_rank}</td>
+          <td>${r.score_bucket}</td>
+          <td>${r.rec_count}</td>
+          <td class="win-rate ${wr(r.win_rate_pct)}">${fmt(r.win_rate_pct)}%</td>
+          <td>${r.avg_days_to_50 ?? '—'}</td>
+          <td>${fmt(r.avg_max_profit)}%</td>
+          <td>$${fmt(r.avg_premium_dollars)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  } catch (e) { document.getElementById('scoreCalTable').innerHTML = err(e); }
+}
+
+// ── Greeks analysis ────────────────────────────────────────────────────────
+async function loadGreeks() {
+  try {
+    const rows = await apiFetch('/api/analysis/greeks');
+    if (!rows.length) { document.getElementById('greeksTable').innerHTML = empty(); return; }
+    document.getElementById('greeksTable').innerHTML = `
+      <table>
+        <thead><tr>
+          <th onclick="sortTable(this,0)">Delta Bucket</th>
+          <th onclick="sortTable(this,1)">Recs</th>
+          <th onclick="sortTable(this,2)">Win %</th>
+          <th onclick="sortTable(this,3)">Θ Theta</th>
+          <th onclick="sortTable(this,4)">γ Gamma</th>
+          <th onclick="sortTable(this,5)">ν Vega</th>
+          <th onclick="sortTable(this,6)">IV Rank</th>
+          <th onclick="sortTable(this,7)">Days→50%</th>
+          <th onclick="sortTable(this,8)">Peak %</th>
+        </tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td>${r.delta_bucket}</td>
+          <td>${r.rec_count}</td>
+          <td class="win-rate ${wr(r.win_rate_pct)}">${fmt(r.win_rate_pct)}%</td>
+          <td>${r.avg_theta?.toFixed(4) ?? '—'}</td>
+          <td>${r.avg_gamma?.toFixed(4) ?? '—'}</td>
+          <td>${r.avg_vega?.toFixed(4) ?? '—'}</td>
+          <td>${r.avg_iv_rank ?? '—'}</td>
+          <td>${r.avg_days_to_50 ?? '—'}</td>
+          <td>${fmt(r.avg_max_profit)}%</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  } catch (e) { document.getElementById('greeksTable').innerHTML = err(e); }
+}
+
+// ── IV Rank ────────────────────────────────────────────────────────────────
+async function loadIvRank() {
+  try {
+    const rows = await apiFetch('/api/analysis/iv_rank');
+    if (!rows.length) { document.getElementById('ivRankTable').innerHTML = empty(); return; }
+    document.getElementById('ivRankTable').innerHTML = `
+      <table>
+        <thead><tr>
+          <th onclick="sortTable(this,0)">IV Rank Bucket</th>
+          <th onclick="sortTable(this,1)">Recs</th>
+          <th onclick="sortTable(this,2)">Win %</th>
+          <th onclick="sortTable(this,3)">Avg Days→50%</th>
+          <th onclick="sortTable(this,4)">Avg Peak</th>
+        </tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td>${r.iv_rank_bucket}</td>
+          <td>${r.rec_count}</td>
+          <td class="win-rate ${wr(r.win_rate_pct)}">${fmt(r.win_rate_pct)}%</td>
+          <td>${r.avg_days_to_50 ?? '—'}</td>
+          <td>${fmt(r.avg_max_profit)}%</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  } catch (e) { document.getElementById('ivRankTable').innerHTML = err(e); }
+}
+
+// ── Day of week ────────────────────────────────────────────────────────────
+async function loadDow() {
+  try {
+    const rows = await apiFetch('/api/analysis/by_dow');
+    if (!rows.length) { document.getElementById('dowTable').innerHTML = empty(); return; }
+    document.getElementById('dowTable').innerHTML = `
+      <table>
+        <thead><tr>
+          <th>Day</th>
+          <th onclick="sortTable(this,1)">Recs</th>
+          <th onclick="sortTable(this,2)">Win %</th>
+          <th onclick="sortTable(this,3)">Avg Days→50%</th>
+          <th onclick="sortTable(this,4)">Avg Premium</th>
+          <th onclick="sortTable(this,5)">Avg Grok Score</th>
+        </tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td><strong>${r.day_of_week}</strong></td>
+          <td>${r.rec_count}</td>
+          <td class="win-rate ${wr(r.win_rate_pct)}">${fmt(r.win_rate_pct)}%</td>
+          <td>${r.avg_days_to_50 ?? '—'}</td>
+          <td>$${fmt(r.avg_premium_dollars)}</td>
+          <td>${r.avg_grok_score ?? '—'}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  } catch (e) { document.getElementById('dowTable').innerHTML = err(e); }
+}
+
+// ── Regime ─────────────────────────────────────────────────────────────────
+async function loadRegime() {
+  try {
+    const rows = await apiFetch('/api/analysis/by_regime');
+    if (!rows.length) { document.getElementById('regimeTable').innerHTML = empty(); return; }
+    document.getElementById('regimeTable').innerHTML = `
+      <table>
+        <thead><tr>
+          <th onclick="sortTable(this,0)">Regime</th>
+          <th onclick="sortTable(this,1)">Recs</th>
+          <th onclick="sortTable(this,2)">Win %</th>
+          <th onclick="sortTable(this,3)">Avg Days→50%</th>
+          <th onclick="sortTable(this,4)">Avg Peak</th>
+          <th onclick="sortTable(this,5)">Avg Premium</th>
+        </tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td><strong>${r.regime}</strong></td>
+          <td>${r.rec_count}</td>
+          <td class="win-rate ${wr(r.win_rate_pct)}">${fmt(r.win_rate_pct)}%</td>
+          <td>${r.avg_days_to_50 ?? '—'}</td>
+          <td>${fmt(r.avg_max_profit)}%</td>
+          <td>$${fmt(r.avg_premium_dollars)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  } catch (e) { document.getElementById('regimeTable').innerHTML = err(e); }
+}
+
+// ── Sector ─────────────────────────────────────────────────────────────────
+async function loadSector() {
+  try {
+    const rows = await apiFetch('/api/analysis/by_sector');
+    if (!rows.length) { document.getElementById('sectorTable').innerHTML = empty(); return; }
+    document.getElementById('sectorTable').innerHTML = `
+      <table>
+        <thead><tr>
+          <th onclick="sortTable(this,0)">Sector</th>
+          <th onclick="sortTable(this,1)">Recs</th>
+          <th onclick="sortTable(this,2)">Win %</th>
+          <th onclick="sortTable(this,3)">Avg Days→50%</th>
+          <th onclick="sortTable(this,4)">Avg Peak</th>
+          <th onclick="sortTable(this,5)">Avg Premium</th>
+          <th onclick="sortTable(this,6)">Avg ROI (ann.)</th>
+        </tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td>${r.sector}</td>
+          <td>${r.rec_count}</td>
+          <td class="win-rate ${wr(r.win_rate_pct)}">${fmt(r.win_rate_pct)}%</td>
+          <td>${r.avg_days_to_50 ?? '—'}</td>
+          <td>${fmt(r.avg_max_profit)}%</td>
+          <td>$${fmt(r.avg_premium_dollars)}</td>
+          <td>${fmt(r.avg_annualized_roi)}%</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  } catch (e) { document.getElementById('sectorTable').innerHTML = err(e); }
+}
+
+// ── Symbol ─────────────────────────────────────────────────────────────────
+async function loadSymbol() {
+  try {
+    const rows = await apiFetch('/api/analysis/by_symbol');
+    if (!rows.length) { document.getElementById('symbolTable').innerHTML = empty(); return; }
+    document.getElementById('symbolTable').innerHTML = `
+      <table>
+        <thead><tr>
+          <th onclick="sortTable(this,0)">Symbol</th>
+          <th onclick="sortTable(this,1)">Sector</th>
+          <th onclick="sortTable(this,2)">Tier</th>
+          <th onclick="sortTable(this,3)">Recs</th>
+          <th onclick="sortTable(this,4)">Win %</th>
+          <th onclick="sortTable(this,5)">Avg Days→50%</th>
+          <th onclick="sortTable(this,6)">Avg Peak %</th>
+          <th onclick="sortTable(this,7)">Avg Premium</th>
+          <th onclick="sortTable(this,8)">Avg Ann. ROI</th>
+          <th onclick="sortTable(this,9)">Avg Δ</th>
+          <th onclick="sortTable(this,10)">Avg IV Rank</th>
+        </tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td><strong>${r.symbol}</strong></td>
+          <td>${r.sector || '—'}</td>
+          <td>T${r.tier ?? '?'}</td>
+          <td>${r.rec_count}</td>
+          <td class="win-rate ${wr(r.win_rate_pct)}">${fmt(r.win_rate_pct)}%</td>
+          <td>${r.avg_days_to_50 ?? '—'}</td>
+          <td>${fmt(r.avg_max_profit)}%</td>
+          <td>$${fmt(r.avg_premium_dollars)}</td>
+          <td>${fmt(r.avg_annualized_roi)}%</td>
+          <td>${r.avg_delta?.toFixed(3) ?? '—'}</td>
+          <td>${r.avg_iv_rank ?? '—'}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  } catch (e) { document.getElementById('symbolTable').innerHTML = err(e); }
+}
+
+// ── Rec detail table ───────────────────────────────────────────────────────
+async function loadRecs(page = 0) {
+  recPage = page;
+  try {
+    const d = await apiFetch(`/api/analysis/recs?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`);
+    allRecs = d.rows || [];
+    filteredRecs = allRecs;
+    renderRecTable(d.total, page);
+  } catch (e) { document.getElementById('recsTable').innerHTML = err(e); }
+}
+
+function filterRecTable() {
+  const search = document.getElementById('recSearch').value.toLowerCase();
+  const filter = document.getElementById('recFilter').value;
+  filteredRecs = allRecs.filter(r => {
+    const symbolMatch = !search || r.symbol.toLowerCase().includes(search);
+    const statusMatch = !filter
+      || (filter === 'win' && r.would_have_won === 1)
+      || (filter === 'loss' && r.tracking_complete === 1 && r.would_have_won !== 1)
+      || (filter === 'tracking' && r.tracking_complete !== 1);
+    return symbolMatch && statusMatch;
+  });
+  renderRecRows();
+}
+
+function renderRecTable(total, page) {
+  renderRecRows();
+  // Pagination
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const pg = document.getElementById('recPagination');
+  if (totalPages <= 1) { pg.innerHTML = ''; return; }
+  let html = '';
+  for (let i = 0; i < totalPages; i++) {
+    html += `<button class="page-btn ${i === page ? 'active' : ''}" onclick="loadRecs(${i})">${i + 1}</button>`;
+  }
+  pg.innerHTML = html;
+}
+
+function renderRecRows() {
+  const rows = filteredRecs;
+  if (!rows.length) { document.getElementById('recsTable').innerHTML = empty(); return; }
+  document.getElementById('recsTable').innerHTML = `
+    <table>
+      <thead><tr>
+        <th onclick="sortTable(this,0)">Date</th>
+        <th onclick="sortTable(this,1)">Day</th>
+        <th onclick="sortTable(this,2)">Symbol</th>
+        <th onclick="sortTable(this,3)">Strike</th>
+        <th onclick="sortTable(this,4)">Expiry</th>
+        <th onclick="sortTable(this,5)">DTE</th>
+        <th onclick="sortTable(this,6)">Premium</th>
+        <th onclick="sortTable(this,7)">Rank</th>
+        <th onclick="sortTable(this,8)">Grok</th>
+        <th onclick="sortTable(this,9)">Δ Delta</th>
+        <th onclick="sortTable(this,10)">γ Gamma</th>
+        <th onclick="sortTable(this,11)">Θ Theta</th>
+        <th onclick="sortTable(this,12)">ν Vega</th>
+        <th onclick="sortTable(this,13)">IV</th>
+        <th onclick="sortTable(this,14)">IV Rank</th>
+        <th onclick="sortTable(this,15)">Sector</th>
+        <th onclick="sortTable(this,16)">Regime</th>
+        <th onclick="sortTable(this,17)">Snaps</th>
+        <th onclick="sortTable(this,18)">Current %</th>
+        <th onclick="sortTable(this,19)">Peak %</th>
+        <th onclick="sortTable(this,20)">→40%</th>
+        <th onclick="sortTable(this,21)">→50%</th>
+        <th onclick="sortTable(this,22)">→60%</th>
+        <th onclick="sortTable(this,23)">→70%</th>
+        <th onclick="sortTable(this,24)">Outcome</th>
+      </tr></thead>
+      <tbody>${rows.map(r => {
+        const outcome = !r.tracking_complete
+          ? `<span class="badge tracking">⏳ Tracking</span>`
+          : r.would_have_won
+          ? `<span class="badge win">✅ Win</span>`
+          : `<span class="badge loss">❌ Loss</span>`;
+        return `<tr>
+          <td>${r.scan_date}</td>
+          <td>${r.day_of_week || '—'}</td>
+          <td><strong>${r.symbol}</strong></td>
+          <td>$${r.strike}</td>
+          <td>${r.expiration}</td>
+          <td>${r.dte}</td>
+          <td>$${fmt(r.premium * 100)}</td>
+          <td>#${r.overall_rank}</td>
+          <td>${r.grok_trade_score}</td>
+          <td>${r.delta?.toFixed(3) ?? '—'}</td>
+          <td>${r.gamma?.toFixed(4) ?? '—'}</td>
+          <td>${r.theta?.toFixed(4) ?? '—'}</td>
+          <td>${r.vega?.toFixed(4) ?? '—'}</td>
+          <td>${fmt(r.iv)}%</td>
+          <td>${fmt(r.iv_rank)}</td>
+          <td>${r.sector || '—'}</td>
+          <td>${r.regime || '—'}</td>
+          <td>${r.snapshot_count ?? 0}</td>
+          <td>${r.latest_pct_profit != null ? `<span class="${pctColor(r.latest_pct_profit)}">${fmt(r.latest_pct_profit)}%</span>` : '—'}</td>
+          <td>${r.max_pct_profit != null ? `<span class="${pctColor(r.max_pct_profit)}">${fmt(r.max_pct_profit)}%</span>` : '—'}</td>
+          <td>${r.days_to_40pct != null ? `<strong>${r.days_to_40pct}d</strong>` : '—'}</td>
+          <td>${r.days_to_50pct != null ? `<strong>${r.days_to_50pct}d</strong>` : '—'}</td>
+          <td>${r.days_to_60pct != null ? `<strong>${r.days_to_60pct}d</strong>` : '—'}</td>
+          <td>${r.days_to_70pct != null ? `<strong>${r.days_to_70pct}d</strong>` : '—'}</td>
+          <td>${outcome}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+}
+
+// ── Table sort ─────────────────────────────────────────────────────────────
+function sortTable(th, colIdx) {
+  const table = th.closest('table');
+  const tbody = table.querySelector('tbody');
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  const asc = th.dataset.asc !== 'true';
+  th.dataset.asc = asc;
+  rows.sort((a, b) => {
+    const aVal = a.cells[colIdx]?.textContent.trim() ?? '';
+    const bVal = b.cells[colIdx]?.textContent.trim() ?? '';
+    const aNum = parseFloat(aVal.replace(/[$%,#d]/g, ''));
+    const bNum = parseFloat(bVal.replace(/[$%,#d]/g, ''));
+    if (!isNaN(aNum) && !isNaN(bNum)) return asc ? aNum - bNum : bNum - aNum;
+    return asc ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+  });
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+// ── Utils ──────────────────────────────────────────────────────────────────
+function fmt(v) { return v != null ? Number(v).toFixed(2) : '—'; }
+function fmtK(v) {
+  if (v == null) return '—';
+  if (v >= 1000000) return (v / 1000000).toFixed(1) + 'M';
+  if (v >= 1000) return (v / 1000).toFixed(1) + 'K';
+  return v.toFixed(0);
+}
+function wr(v) { return v >= 70 ? 'high' : v >= 50 ? 'mid' : 'low'; }
+function pctColor(v) { return v >= 50 ? 'win-rate high' : v >= 20 ? 'win-rate mid' : 'win-rate low'; }
+function err(e) { return `<div class="empty" style="color:#fb7185">Error: ${e.message}</div>`; }
+function empty() { return `<div class="empty">No data yet — run the scanner to start tracking</div>`; }
+</script>
+</body>
+</html>

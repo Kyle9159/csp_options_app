@@ -184,7 +184,8 @@ def get_regime_history(limit: int = 60) -> list[dict]:
 
 # ==================== RECOMMENDATION LOGGING ====================
 
-def log_recommendations(scanner_tiles, regime_name, scan_date=None):
+def log_recommendations(scanner_tiles, regime_name, scan_date=None,
+                        scan_time=None, day_of_week=None):
     """
     Log all scanner recommendations from a scan run.
     Called at end of simple_options_scanner.main().
@@ -193,11 +194,18 @@ def log_recommendations(scanner_tiles, regime_name, scan_date=None):
         scanner_tiles: List of tile dicts from the scanner
         regime_name: Current regime string (e.g. 'MILD_BULL')
         scan_date: Override scan date (default: today)
+        scan_time: HH:MM string of when scan ran (default: now)
+        day_of_week: e.g. 'Monday' (default: derived from scan_date)
     """
     if not scanner_tiles:
         return 0
 
     scan_date = scan_date or date.today().isoformat()
+    if not scan_time:
+        scan_time = datetime.now().strftime('%H:%M')
+    if not day_of_week:
+        day_of_week = datetime.fromisoformat(scan_date).strftime('%A')
+
     count = 0
 
     with get_db() as conn:
@@ -207,20 +215,38 @@ def log_recommendations(scanner_tiles, regime_name, scan_date=None):
 
                 conn.execute("""
                     INSERT INTO recommendations (
-                        scan_date, symbol, strike, expiration, dte, premium,
-                        delta, iv, annualized_roi, distance_pct, tier, regime,
+                        scan_date, scan_time, day_of_week,
+                        symbol, sector, strike, expiration, dte, premium,
+                        delta, gamma, theta, vega,
+                        iv, iv_rank, annualized_roi, distance_pct, tier, regime,
                         grok_trade_score, grok_recommendation, improved_put_score,
-                        rebound_score, sr_risk_flag, overall_rank, occ_symbol
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        rebound_score, sr_risk_flag, overall_rank, occ_symbol,
+                        underlying_price, bid, ask,
+                        open_interest, volume, bid_ask_spread_pct
+                    ) VALUES (
+                        ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?
+                    )
                 """, (
-                    scan_date,
+                    scan_date, scan_time, day_of_week,
                     opp.get('symbol', ''),
+                    opp.get('sector', ''),
                     opp.get('strike', 0),
                     exp_date,
                     opp.get('dte', 0),
                     opp.get('premium', 0),
                     opp.get('delta', 0),
+                    opp.get('gamma', 0),
+                    opp.get('theta', 0),
+                    opp.get('vega', 0),
                     opp.get('iv', 0),
+                    opp.get('iv_rank', 50),
                     opp.get('annualized_roi', 0),
                     opp.get('distance', 0),
                     opp.get('tier', 3),
@@ -232,6 +258,12 @@ def log_recommendations(scanner_tiles, regime_name, scan_date=None):
                     opp.get('sr_risk_flag', ''),
                     opp.get('overall_rank', 0),
                     opp.get('contract', ''),
+                    opp.get('current_price', 0),
+                    opp.get('bid', 0),
+                    opp.get('ask', 0),
+                    opp.get('open_interest', 0),
+                    opp.get('volume', 0),
+                    opp.get('bid_ask_spread_pct', 0),
                 ))
                 count += 1
 

@@ -1594,21 +1594,11 @@ def run_smart_alerts():
                 if not positions:
                     return {'status': 'success', 'message': 'No trades to scan'}
 
-                # Convert to format expected by smart_alerts
-                trades = [{
-                    'symbol': row.get('Symbol', ''),
-                    'strike': safe_float(row.get('Strike', 0)),
-                    'entry_premium': safe_float(row.get('Entry Premium', 0)),
-                    'current_premium': safe_float(row.get('Current Premium', 0)),
-                    'underlying_price': safe_float(row.get('Current Price', 0)),
-                    'expiration_date': str(row.get('Exp Date', '')),
-                    'current_iv': safe_float(row.get('IV', 0.30))
-                } for row in positions]
-
-                progress_callback(50)
+                # Convert to dict format expected by smart_alerts
+                trades = positions
 
                 # Run alert scan
-                alerts = await run_alert_scan(trades)
+                alerts = await run_alert_scan(trades=trades)
 
                 progress_callback(100)
 
@@ -2574,10 +2564,17 @@ def get_margin_requirements():
                     quantity=safe_int(row.get('Quantity', 0)),
                     strike=safe_float(row.get('Strike', 0)),
                     expiration=str(row.get('Exp Date', '')),
-                    entry_premium=0, current_premium=0,
-                    margin_requirement=0, current_value=0, unrealized_pnl=0,
-                    delta=0, theta=0, vega=0,
-                    days_to_expiration=0, implied_volatility=0, underlying_price=0
+                    entry_premium=safe_float(row.get('Entry Premium', 0)),
+                    current_premium=safe_float(row.get('Current Premium', 0)),
+                    margin_requirement=safe_float(row.get('Strike', 0)) * 100 * safe_int(row.get('Quantity', 0)),
+                    current_value=safe_float(row.get('Current Premium', 0)) * safe_int(row.get('Quantity', 0)) * 100,
+                    unrealized_pnl=safe_float(row.get('Current P/L', 0)),
+                    delta=safe_float(row.get('Delta', -0.30)),
+                    theta=safe_float(row.get('Theta', 0.15)),
+                    vega=safe_float(row.get('Vega', 0.20)),
+                    days_to_expiration=safe_int(row.get('DTE', 30)),
+                    implied_volatility=safe_float(row.get('IV', 0.25)),
+                    underlying_price=safe_float(row.get('Current Price', 0))
                 )
                 positions.append(pos)
             except:
@@ -2968,139 +2965,47 @@ Be specific about delta, RSI, distance, and capital efficiency. Keep it under 20
 
 
 @app.route('/api/schwab/sell_to_open', methods=['POST'])
-def api_sell_to_open():
-    """
-    Place a Sell To Open order for a cash-secured put.
+def sell_to_open_csp():
+    # ...existing code...
+    logger.info(f"STO result for {symbol}: {result}")
 
-    Request JSON:
-        {
-            "symbol": "AAPL",
-            "strike": 150.0,
-            "expiration": "2026-01-17",  # YYYY-MM-DD format
-            "contracts": 1,
-            "limit_price": 2.50,         # Price per contract
-            "dry_run": false             # Optional, default false
-        }
-
-    Returns:
-        {
-            "success": true/false,
-            "order_id": "...",
-            "message": "..."
-        }
-    """
-    try:
-        data = request.json
-
-        # Validate required fields
-        required_fields = ['symbol', 'strike', 'expiration', 'contracts', 'limit_price']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({
-                    'success': False,
-                    'message': f'Missing required field: {field}'
-                }), 400
-
-        # Get account ID from environment
-        account_id = os.getenv('LIVE_ACCOUNT_ID')
-        if not account_id:
-            return jsonify({
-                'success': False,
-                'message': 'LIVE_ACCOUNT_ID not configured'
-            }), 500
-
-        # Place order
-        result = sell_put_to_open(
-            account_id=account_id,
-            symbol=data['symbol'],
-            strike=float(data['strike']),
-            expiration=data['expiration'],
-            contracts=int(data['contracts']),
-            limit_price=float(data['limit_price']),
-            dry_run=data.get('dry_run', False)
-        )
-
-        if result['success']:
-            logger.info(f"Order placed: {result['message']}")
-            return jsonify(result), 200
-        else:
-            logger.error(f"Order failed: {result['message']}")
-            return jsonify(result), 400
-
-    except Exception as e:
-        logger.error(f"Error in sell_to_open endpoint: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'message': f'Server error: {str(e)}'
-        }), 500
+    return jsonify(result)
 
 
 @app.route('/api/schwab/buy_to_close', methods=['POST'])
-def api_buy_to_close():
-    """
-    Place a Buy To Close order to close an existing short put position.
+def buy_to_close_csp():
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': 'No JSON data provided'}), 400
 
-    Request JSON:
-        {
-            "symbol": "AAPL",
-            "strike": 150.0,
-            "expiration": "2026-01-17",  # YYYY-MM-DD format
-            "contracts": 1,
-            "limit_price": 1.25,         # Price per contract
-            "dry_run": false             # Optional, default false
-        }
+    symbol = data.get('symbol', '').upper()
+    strike = data.get('strike')
+    expiration = data.get('expiration')
+    quantity = data.get('quantity', 1)
+    limit_price = data.get('limit_price')
+    dry_run = data.get('dry_run', False)
 
-    Returns:
-        {
-            "success": true/false,
-            "order_id": "...",
-            "message": "..."
-        }
-    """
+    if not all([symbol, strike, expiration]):
+        return jsonify({'success': False, 'message': 'Missing required: symbol, strike, expiration'}), 400
+
     try:
-        data = request.json
+        strike = float(strike)
+        quantity = int(quantity)
+    except (ValueError, TypeError):
+        return jsonify({'success': False, 'message': 'Invalid strike or quantity'}), 400
 
-        # Validate required fields
-        required_fields = ['symbol', 'strike', 'expiration', 'contracts', 'limit_price']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({
-                    'success': False,
-                    'message': f'Missing required field: {field}'
-                }), 400
+    account_hash = os.getenv('LIVE_ACCOUNT_ID')
+    if not account_hash:
+        return jsonify({'success': False, 'message': 'LIVE_ACCOUNT_ID env var missing'}), 500
 
-        # Get account ID from environment
-        account_id = os.getenv('LIVE_ACCOUNT_ID')
-        if not account_id:
-            return jsonify({
-                'success': False,
-                'message': 'LIVE_ACCOUNT_ID not configured'
-            }), 500
+    logger.info(f"BTC request: {symbol} ${strike}P exp {expiration} qty={quantity} limit=${limit_price or 'MARKET'} dry={dry_run} acct={account_hash[:16]}...")
 
-        # Place order
-        result = buy_put_to_close(
-            account_id=account_id,
-            symbol=data['symbol'],
-            strike=float(data['strike']),
-            expiration=data['expiration'],
-            contracts=int(data['contracts']),
-            limit_price=float(data['limit_price']),
-            dry_run=data.get('dry_run', False)
-        )
+    from schwab_utils import buy_put_to_close
+    result = buy_put_to_close(account_hash, symbol, strike, expiration, quantity, limit_price, dry_run)
 
-        if result['success']:
-            logger.info(f"Order placed: {result['message']}")
-            return jsonify(result), 200
-        else:
-            logger.error(f"Order failed: {result['message']}")
-            return jsonify(result), 400
+    logger.info(f"BTC result for {symbol}: {result}")
 
-    except Exception as e:
-        logger.error(f"Error in buy_to_close endpoint: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'message': f'Server error: {str(e)}'
-        }), 500
+    return jsonify(result)
 
 
 # =============================================================================
@@ -3447,6 +3352,137 @@ def api_trade_journal_calibration():
         return jsonify({'ok': True, 'data': data})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# =============================================================================
+# ANALYSIS DASHBOARD — Recommendation Accuracy Tracker
+# =============================================================================
+
+@app.route('/analysis')
+def analysis_dashboard():
+    """Serve the recommendation accuracy analysis page."""
+    return send_from_directory('.', 'analysis_dashboard.html')
+
+
+@app.route('/api/analysis/summary')
+def api_analysis_summary():
+    try:
+        from rec_accuracy_tracker import get_summary_stats
+        return jsonify({'ok': True, 'data': get_summary_stats()})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analysis/score_calibration')
+def api_analysis_score_calibration():
+    try:
+        from rec_accuracy_tracker import get_score_calibration
+        return jsonify({'ok': True, 'data': get_score_calibration()})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analysis/by_symbol')
+def api_analysis_by_symbol():
+    try:
+        from rec_accuracy_tracker import get_by_symbol
+        return jsonify({'ok': True, 'data': get_by_symbol()})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analysis/by_sector')
+def api_analysis_by_sector():
+    try:
+        from rec_accuracy_tracker import get_by_sector
+        return jsonify({'ok': True, 'data': get_by_sector()})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analysis/by_dow')
+def api_analysis_by_dow():
+    try:
+        from rec_accuracy_tracker import get_by_day_of_week
+        return jsonify({'ok': True, 'data': get_by_day_of_week()})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analysis/by_regime')
+def api_analysis_by_regime():
+    try:
+        from rec_accuracy_tracker import get_by_regime
+        return jsonify({'ok': True, 'data': get_by_regime()})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analysis/iv_rank')
+def api_analysis_iv_rank():
+    try:
+        from rec_accuracy_tracker import get_iv_rank_analysis
+        return jsonify({'ok': True, 'data': get_iv_rank_analysis()})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analysis/greeks')
+def api_analysis_greeks():
+    try:
+        from rec_accuracy_tracker import get_greeks_analysis
+        return jsonify({'ok': True, 'data': get_greeks_analysis()})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analysis/profit_timeline')
+def api_analysis_profit_timeline():
+    try:
+        from rec_accuracy_tracker import get_profit_timeline
+        return jsonify({'ok': True, 'data': get_profit_timeline()})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analysis/recs')
+def api_analysis_recs():
+    try:
+        limit = min(int(request.args.get('limit', 50)), 200)
+        offset = int(request.args.get('offset', 0))
+        from rec_accuracy_tracker import get_recs_with_outcomes
+        return jsonify({'ok': True, 'data': get_recs_with_outcomes(limit, offset)})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analysis/snapshot_history/<int:rec_id>')
+def api_analysis_snapshot_history(rec_id):
+    try:
+        from rec_accuracy_tracker import get_snapshot_history
+        return jsonify({'ok': True, 'data': get_snapshot_history(rec_id)})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/analysis/snapshot_now', methods=['POST'])
+def api_analysis_snapshot_now():
+    """Manually trigger a snapshot job (runs in background thread)."""
+    task_id = str(uuid.uuid4())
+    progress_tracker[task_id] = {'progress': 0, 'status': 'running', 'result': None}
+
+    def _run():
+        try:
+            from rec_accuracy_tracker import run_snapshot_job
+            result = run_snapshot_job()
+            progress_tracker[task_id].update({'progress': 100, 'status': 'complete', 'result': result})
+        except Exception as e:
+            progress_tracker[task_id].update({'status': 'error', 'error': str(e)})
+        finally:
+            threading.Timer(300, lambda: progress_tracker.pop(task_id, None)).start()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'ok': True, 'data': {'task_id': task_id}})
 
 
 if __name__ == '__main__':
