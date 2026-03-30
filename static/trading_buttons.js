@@ -57,6 +57,12 @@ function addTradingButtonsToOpportunities() {
                         <input type="number" class="trade-limit-price" value="${premium || 0}" step="0.05"
                                style="width:100%; padding:8px; background:#1e293b; color:white; border:1px solid #334155; border-radius:6px;">
                     </div>
+                    <!-- Dry Run toggle -->
+                    <div style="grid-column: 1 / -1;">
+                        <label style="color:#94a3b8; font-size:0.85rem; display:flex; align-items:center; gap:6px; cursor:pointer;">
+                            <input type="checkbox" class="dry-run-toggle" checked> 🧪 Dry Run (Safe Test)
+                        </label>
+                    </div>
                 </div>
 
                 <!-- Action Button -->
@@ -173,18 +179,16 @@ function attachTradingEventListeners() {
             const quantity = parseInt(tile.querySelector('.trade-quantity').value);
             const limitPrice = parseFloat(tile.querySelector('.trade-limit-price').value);
             const statusDiv = tile.querySelector('.order-status');
+            const dry_run = tile.querySelector('.dry-run-toggle').checked;
 
             // Confirmation
             const totalCredit = (limitPrice * quantity * 100).toFixed(2);
             const capitalRequired = (strike * quantity * 100).toLocaleString();
 
-            const confirmed = confirm(
-                `Sell ${quantity} contract(s) of ${symbol} $${strike}P @ $${limitPrice}?\n\n` +
-                `Total Credit: $${totalCredit}\n` +
-                `Capital Required: $${capitalRequired}\n\n` +
-                `This will place a LIVE order in your Schwab account!`
-            );
-
+            const confirmText = dry_run
+                ? `DRY RUN: Test sell ${quantity} ${symbol} $${strike}P exp ${expiration} @ $${limitPrice}\n\nNo real order placed.` 
+                : `LIVE ORDER: Sell ${quantity} contract(s) of ${symbol} $${strike}P @ $${limitPrice}?\n\nTotal Credit: $${totalCredit}\nCapital Required: $${capitalRequired}`;
+            const confirmed = confirm(confirmText);
             if (!confirmed) return;
 
             // Show loading
@@ -194,7 +198,7 @@ function attachTradingEventListeners() {
             statusDiv.style.color = '#fbbf24';
 
             try {
-                const response = await fetch('/api/order/sell_put', {
+                const response = await fetch('/api/schwab/sell_to_open', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
@@ -202,7 +206,8 @@ function attachTradingEventListeners() {
                         strike,
                         expiration,
                         quantity,
-                        limit_price: limitPrice
+                        limit_price: limitPrice,
+                        dry_run
                     })
                 });
 
@@ -313,16 +318,16 @@ function attachCloseTradeEventListeners() {
             const quantity = parseInt(tile.querySelector('.close-quantity').value);
             const limitPrice = parseFloat(tile.querySelector('.close-limit-price').value);
             const statusDiv = tile.querySelector('.close-status');
+            const dry_run = tile.querySelector('.dry-run-toggle').checked;
 
             // Confirmation
             const totalCost = (limitPrice * quantity * 100).toFixed(2);
 
-            const confirmed = confirm(
-                `Buy to close ${quantity} contract(s) of ${symbol} $${strike}P @ $${limitPrice}?\n\n` +
-                `Total Cost: $${totalCost}\n\n` +
-                `This will place a LIVE order in your Schwab account!`
-            );
-
+            const confirmText = dry_run
+                ? `DRY RUN: Test buy to close ${quantity} ${symbol} $${strike}P exp ${expiration} @ $${limitPrice}\n\nNo real order placed.` 
+                : `LIVE ORDER: Buy to close ${quantity} contract(s) of ${symbol} $${strike}P @ $${limitPrice}?\n\nTotal Cost: $${totalCost}\n\n` +
+                    `This will place a LIVE order in your Schwab account!`;
+            const confirmed = confirm(confirmText);
             if (!confirmed) return;
 
             // Show loading
@@ -332,7 +337,7 @@ function attachCloseTradeEventListeners() {
             statusDiv.style.color = '#fbbf24';
 
             try {
-                const response = await fetch('/api/order/close_put', {
+                const response = await fetch('/api/schwab/buy_to_close', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
@@ -340,7 +345,8 @@ function attachCloseTradeEventListeners() {
                         strike,
                         expiration,
                         quantity,
-                        limit_price: limitPrice
+                        limit_price: limitPrice,
+                        dry_run
                     })
                 });
 

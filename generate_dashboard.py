@@ -2164,6 +2164,10 @@ def generate_html():
                     style="padding:12px 20px; background:#7c3aed; color:white; border:none; border-radius:12px; cursor:pointer; font-weight:bold; box-shadow:0 4px 15px rgba(0,0,0,0.4);">
                 🗑️ Clear Cache
             </button>
+                <button onclick="window.location.href='/auth/start'"
+                    style="padding:12px 20px; background:#0369a1; color:white; border:none; border-radius:12px; cursor:pointer; font-weight:bold; box-shadow:0 4px 15px rgba(0,0,0,0.4);">
+                🔑 Refresh Token
+            </button>
             </div>
             <div class="container" style="margin-top:60px;">  <!-- Push content down a bit -->
                 <h1>🚀 Kyle's Interactive Trading Dashboard</h1>

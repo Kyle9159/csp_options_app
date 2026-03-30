@@ -359,13 +359,12 @@ Schwab OAuth tokens expire after **7 days**. When your token is expired or expir
 
 ### Re-authorizing from the Dashboard
 
-1. Click the **Re-Authorize Schwab** button in the banner (or navigate to `https://127.0.0.1:5000/auth/start`)
-2. A Schwab login page opens in your browser
+1. Click the **Re-Authorize Schwab** button in the banner (or navigate to `https://127.0.0.1:5101/auth/start` on the same Mac running the dashboard)
+2. Your current browser tab redirects to the Schwab login page
 3. Log in and click **Allow**
-4. You'll be redirected to a URL starting with `https://127.0.0.1:8182/?code=...` — this page will look like an error, which is **expected**
-5. Copy the **entire URL** from your browser's address bar
-6. Paste it into the terminal where `dashboard_server.py` is running and press Enter
-7. The banner will disappear and the dashboard will resume live data
+4. Schwab redirects to `https://127.0.0.1:8182/?code=...`; you may see a self-signed certificate warning first, which is expected for the local callback listener
+5. After approval, the local callback page confirms the token was received
+6. Return to the dashboard; the banner should disappear and live data should resume
 
 ### Schwab Developer Portal Setup (one-time)
 

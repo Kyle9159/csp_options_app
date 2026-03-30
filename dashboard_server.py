@@ -64,6 +64,9 @@ open_bot = telegram_bot(token=OPEN_TRADE_TELEGRAM_TOKEN) if OPEN_TRADE_TELEGRAM_
 XAI_API_KEY = os.getenv('XAI_API_KEY')
 GROK_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 ET_TZ = pytz.timezone('US/Eastern')
+DASHBOARD_HOST = '127.0.0.1'
+DASHBOARD_PORT = 5000
+DASHBOARD_BASE_URL = f'https://{DASHBOARD_HOST}:{DASHBOARD_PORT}'
 
 LAST_MIRROR_CALL = 0
 MIRROR_CACHE = None
@@ -3011,7 +3014,7 @@ def buy_to_close_csp():
 # =============================================================================
 # SCHWAB OAUTH WEB FLOW
 # Uses schwab-py's local HTTPS listener on 127.0.0.1 (recommended callback 8182)
-# while keeping the dashboard itself on port 5000.
+# while keeping the dashboard itself on port 5101.
 # REDIRECT_URI in .env must exactly match an approved Schwab callback URL.
 # =============================================================================
 
@@ -3034,36 +3037,95 @@ def _set_auth_flow_state(status: str, message: str = '') -> None:
     _auth_flow_state['started_at'] = time.time() if status == 'running' else _auth_flow_state.get('started_at')
 
 
-def _run_schwab_login_flow() -> None:
+def _run_schwab_login_flow(auth_context) -> None:
+    """Listen on the registered Schwab callback port for the OAuth redirect, then exchange the code."""
     from schwab import auth as schwab_auth
+    from urllib.parse import urlparse
+    from werkzeug.serving import make_server
+    from flask import Flask as _Flask
+    from flask import request as _freq
 
     api_key = os.getenv('SCHWAB_API_KEY')
     app_secret = os.getenv('SCHWAB_APP_SECRET')
-    callback_url = os.getenv('REDIRECT_URI', 'https://127.0.0.1:8182')
+    callback_url = auth_context.callback_url
+    callback_timeout = 300.0
 
-    try:
-        os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
-        logger.info(f"Starting schwab-py login flow with callback {callback_url}")
-        schwab_auth.client_from_login_flow(
-            api_key=api_key,
-            app_secret=app_secret,
-            callback_url=callback_url,
-            token_path=TOKEN_PATH,
-            asyncio=False,
-            enforce_enums=True,
-            callback_timeout=300.0,
-            interactive=False,
+    parsed = urlparse(callback_url)
+    callback_port = parsed.port or 8182
+
+    # Minimal in-process HTTPS listener — same adhoc SSL that schwab-py uses
+    _received_url: list = []
+    _got_callback = threading.Event()
+
+    _listener = _Flask('_schwab_oauth_listener')
+
+    @_listener.route('/', methods=['GET'], strict_slashes=False)
+    def _oauth_cb():
+        _received_url.append(_freq.url)
+        _got_callback.set()
+        return (
+            '<html><body style="font-family:sans-serif;background:#0f172a;'
+            'color:#c1ffd1;padding:40px;text-align:center">'
+            '<h2>&#10003; Authorization received</h2>'
+            '<p>You may close this tab and return to the dashboard.</p>'
+            '</body></html>',
+            200,
         )
 
+    srv = None
+    try:
+        srv = make_server('127.0.0.1', callback_port, _listener, ssl_context='adhoc')
+        srv_thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        srv_thread.start()
+
+        _set_auth_flow_state('running', 'Waiting for Schwab approval on local callback...')
+        logger.info(f"Schwab OAuth listener started on https://127.0.0.1:{callback_port}")
+
+        if not _got_callback.wait(timeout=callback_timeout):
+            raise RuntimeError(
+                f'Timed out after {int(callback_timeout)}s waiting for the Schwab callback. '
+                'Complete the sign-in on this Mac within 5 minutes and try again.'
+            )
+
+        received = _received_url[0]
+        logger.info('Schwab OAuth callback received — exchanging code for token')
+
+        def token_write_func(token):
+            token_dir = os.path.dirname(TOKEN_PATH)
+            if token_dir:
+                os.makedirs(token_dir, exist_ok=True)
+            with open(TOKEN_PATH, 'w') as tf:
+                json.dump(token, tf, indent=2)
+            logger.info(f'Schwab token written to {TOKEN_PATH}')
+
+        schwab_auth.client_from_received_url(
+            api_key=api_key,
+            app_secret=app_secret,
+            auth_context=auth_context,
+            received_url=received,
+            token_write_func=token_write_func,
+            asyncio=False,
+            enforce_enums=True,
+        )
+
+        os.makedirs('cache_files', exist_ok=True)
         with open(LAST_AUTH_PATH, 'w') as f:
             f.write(str(time.time()))
 
+        global _pending_auth_context
+        _pending_auth_context = None
         _set_auth_flow_state('success', 'Schwab token refreshed successfully.')
-        logger.info('Schwab login flow completed successfully')
+        logger.info('Schwab OAuth complete — token saved')
     except Exception as e:
-        logger.error(f"Schwab login flow failed: {e}", exc_info=True)
+        logger.error(f'Schwab login flow failed: {e}', exc_info=True)
+        _pending_auth_context = None
         _set_auth_flow_state('error', f'Schwab sign-in failed: {e}')
     finally:
+        if srv is not None:
+            try:
+                srv.shutdown()
+            except Exception:
+                pass
         with _auth_flow_lock:
             if _auth_flow_state['status'] == 'running':
                 _set_auth_flow_state('idle', '')
@@ -3145,6 +3207,10 @@ def auth_status():
 @app.route('/auth/start')
 def auth_start():
     """Start Schwab re-authorization using schwab-py's local HTTPS callback listener."""
+    global _pending_auth_context
+
+    from schwab import auth as schwab_auth
+
     api_key = os.getenv('SCHWAB_API_KEY')
     app_secret = os.getenv('SCHWAB_APP_SECRET')
     callback_url = os.getenv('REDIRECT_URI', 'https://127.0.0.1:8182')
@@ -3160,22 +3226,32 @@ def auth_start():
             if _auth_flow_state['status'] == 'running':
                 return """<html><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:40px;text-align:center">
                     <h2 style="color:#60a5fa">Schwab Sign-In Already Running</h2>
-                    <p>The browser-assisted login flow is already active. Finish the login window that opened, then return here.</p>
+                    <p>A Schwab sign-in flow is already active. Finish that approval flow on this Mac, then return here.</p>
                     <p><a href="/" style="color:#60a5fa">Back to Dashboard</a></p>
                 </body></html>"""
 
-            _set_auth_flow_state('running', 'Opening Schwab sign-in in your browser...')
-            thread = threading.Thread(target=_run_schwab_login_flow, daemon=True)
+            auth_context = schwab_auth.get_auth_context(api_key, callback_url)
+            _pending_auth_context = auth_context
+            _set_auth_flow_state('running', 'Redirecting to Schwab sign-in...')
+            thread = threading.Thread(target=_run_schwab_login_flow, args=(auth_context,), daemon=True)
             thread.start()
 
         logger.info(f"Schwab OAuth flow started on callback listener {callback_url}")
-        return f"""<html><head><meta http-equiv="refresh" content="10;url=/"></head>
+        auth_url = auth_context.authorization_url
+        auth_url_js = json.dumps(auth_url)
+        return f"""<html><head>
+            <script>
+                window.addEventListener('load', function () {{
+                    window.location.replace({auth_url_js});
+                }});
+            </script>
+        </head>
         <body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:40px;text-align:center">
-            <h2 style="color:#60a5fa">Starting Schwab Sign-In</h2>
-            <p>Your browser should open automatically for Schwab login.</p>
-            <p>Callback listener: <code>{callback_url}</code></p>
-            <p>If the browser shows a self-signed certificate warning for <code>127.0.0.1:8182</code>, continue anyway. That is expected for the local callback listener.</p>
-            <p>After you finish login, you will be redirected back to the dashboard.</p>
+            <h2 style="color:#60a5fa">Redirecting to Schwab Sign-In</h2>
+            <p>This page is sending your current browser session to Schwab now.</p>
+            <p>If you are not redirected within a second, <a href="{auth_url}" style="color:#60a5fa">continue to Schwab sign-in</a>.</p>
+            <p>Callback: <code>{callback_url}</code></p>
+            <p>Open this page on the same Mac running the dashboard. After Schwab login, you will be redirected back automatically.</p>
             <p><a href="/" style="color:#60a5fa">Return to Dashboard</a></p>
         </body></html>"""
     except Exception as e:
@@ -3489,7 +3565,7 @@ if __name__ == '__main__':
     logger.info("=" * 60)
     logger.info("DASHBOARD SERVER STARTING")
     logger.info("=" * 60)
-    logger.info("Server URL: http://127.0.0.1:5101")
+    logger.info(f"Server URL: {DASHBOARD_BASE_URL}")
     logger.info("Features: Live quotes, parallel scanners, Telegram alerts")
     logger.info("")
     logger.info("Phase 3 Endpoints:")
@@ -3549,7 +3625,8 @@ if __name__ == '__main__':
                 if days_left <= _WARN_DAYS:
                     msg = (
                         f"⚠️ Schwab token expiring in {days_left:.1f} day(s)!\n"
-                        f"Re-authorize now: https://127.0.0.1:5000/auth/start"
+                        f"Re-authorize now: {DASHBOARD_BASE_URL}/auth/start\n"
+                        "Open that link on the same Mac running the dashboard."
                     )
                     asyncio.run(
                         telegram_bot(token=tg_token).send_message(chat_id=tg_chat, text=msg)
@@ -3610,8 +3687,8 @@ if __name__ == '__main__':
     # For development, use Flask dev server
     # For production, use: gunicorn -w 4 -b 0.0.0.0:5000 dashboard_server:app
     app.run(
-        host='127.0.0.1',
-        port=5101,
+        host=DASHBOARD_HOST,
+        port=DASHBOARD_PORT,
         debug=False,
         use_reloader=False,
         threaded=True,   # Enable threading for concurrent requests
