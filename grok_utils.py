@@ -11,8 +11,12 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Grok API configuration
-GROK_API_KEY = os.getenv('XAI_API_KEY')
 GROK_ENDPOINT = "https://api.x.ai/v1/chat/completions"
+
+
+def _get_api_key() -> str | None:
+    """Read API key at call time so dotenv has a chance to load first."""
+    return os.getenv('XAI_API_KEY')
 
 # Cache directory
 CACHE_DIR = Path("cache_files")
@@ -92,7 +96,8 @@ def _call_grok(messages: list, model: str = MODEL_FAST, max_tokens: int = 300, j
     Central HTTP call with usage logging.
     Returns parsed text content or None on error.
     """
-    if not GROK_API_KEY:
+    api_key = _get_api_key()
+    if not api_key:
         return None
     payload: dict = {
         "model": model,
@@ -109,7 +114,7 @@ def _call_grok(messages: list, model: str = MODEL_FAST, max_tokens: int = 300, j
     try:
         response = requests.post(
             GROK_ENDPOINT,
-            headers={"Authorization": f"Bearer {GROK_API_KEY}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=payload,
             timeout=timeout,
         )
@@ -131,7 +136,7 @@ def get_grok_analysis(symbol, context="", use_reasoning=False):
     Get Grok analysis for a symbol.
     use_reasoning=True triggers the expensive model (call only on user-facing requests).
     """
-    if not GROK_API_KEY:
+    if not _get_api_key():
         return "Grok API key not configured"
 
     model = MODEL_REASONING if use_reasoning else MODEL_MID
@@ -227,7 +232,7 @@ def get_grok_opportunity_analysis(symbol, price, strike, dte, premium, delta, iv
 
     Cache: disk-backed, keyed by all inputs + date (good for the full trading day).
     """
-    if not GROK_API_KEY:
+    if not _get_api_key():
         return 0.5, "Grok API not configured"
 
     # Build a deterministic cache key from all trade inputs + model tier + today's date
@@ -314,7 +319,7 @@ def get_grok_0dte_recommendation(symbol, underlying_price, short_put, short_call
         dict: {'recommendation': 'SELL_PUT'|'SELL_CALL'|'NEUTRAL', 'confidence': 1-5, 'reasoning': str}
     """
     _neutral = {"recommendation": "NEUTRAL", "confidence": 1, "reasoning": "Grok API not configured"}
-    if not GROK_API_KEY:
+    if not _get_api_key():
         return _neutral
 
     model = MODEL_REASONING if use_reasoning else MODEL_FAST
